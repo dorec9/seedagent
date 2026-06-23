@@ -9,6 +9,40 @@ from urllib import error, request
 from config import KiwoomConfig
 
 
+class _ResponseAdapter:
+    def __init__(self, status_code: int, body: str) -> None:
+        self.status_code = status_code
+        self._body = body
+
+    def json(self) -> Any:
+        return json.loads(self._body)
+
+
+class _RequestsAdapter:
+    class RequestException(Exception):
+        """Local requests-compatible exception for network errors."""
+
+    @staticmethod
+    def post(url: str, *, json: dict[str, Any], headers: dict[str, str], timeout: float) -> _ResponseAdapter:
+        payload_bytes = __import__("json").dumps(json).encode("utf-8")
+        token_request = request.Request(
+            url,
+            data=payload_bytes,
+            headers={"Content-Type": "application/json", **headers},
+            method="POST",
+        )
+        try:
+            with request.urlopen(token_request, timeout=timeout) as response:
+                return _ResponseAdapter(response.status, response.read().decode("utf-8"))
+        except error.HTTPError as exc:
+            return _ResponseAdapter(exc.code, exc.read().decode("utf-8", errors="replace"))
+        except (error.URLError, OSError) as exc:
+            raise _RequestsAdapter.RequestException(str(exc)) from exc
+
+
+requests = _RequestsAdapter()
+
+
 class KiwoomAuth:
     """Issue Kiwoom REST API access tokens without logging sensitive values."""
 
@@ -34,46 +68,33 @@ class KiwoomAuth:
             "secretkey": self.config.secretkey,
         }
 
-        payload_bytes = json.dumps(body).encode("utf-8")
-        token_request = request.Request(
-            url,
-            data=payload_bytes,
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
-            method="POST",
-        )
-
         try:
-            with request.urlopen(token_request, timeout=self.timeout) as response:
-                self.last_status_code = response.status
-                response_body = response.read().decode("utf-8")
-        except error.HTTPError as exc:
-            self.last_status_code = exc.code
-            error_body = exc.read().decode("utf-8", errors="replace")
-            error_message = self._extract_error_message(error_body, exc.reason)
-            self.last_error = error_message
-            return self._result(
-                token_issued=False,
-                access_token_exists=False,
-                errors=[f"Token request failed with status {exc.code}: {error_message}"],
+            response = requests.post(
+                url,
+                json=body,
+                headers={"Accept": "application/json"},
+                timeout=self.timeout,
             )
-        except error.URLError as exc:
-            self.last_error = str(exc.reason)
-            return self._result(
-                token_issued=False,
-                access_token_exists=False,
-                errors=[f"Token request failed: {self.last_error}"],
-            )
-        except OSError as exc:
-            self.last_error = str(exc)
+        except _RequestsAdapter.RequestException as exc:
+            self.last_error = exc.__class__.__name__
             return self._result(
                 token_issued=False,
                 access_token_exists=False,
                 errors=[f"Token request failed: {self.last_error}"],
             )
 
+        self.last_status_code = response.status_code
+        if response.status_code != 200:
+            self.last_error = f"Token request failed with status {response.status_code}"
+            return self._result(
+                token_issued=False,
+                access_token_exists=False,
+                errors=[self.last_error],
+            )
+
         try:
-            payload = json.loads(response_body)
-        except json.JSONDecodeError:
+            payload = response.json()
+        except ValueError:
             self.last_error = "Token response was not valid JSON"
             return self._result(
                 token_issued=False,
@@ -81,9 +102,10 @@ class KiwoomAuth:
                 errors=[self.last_error],
             )
 
-        access_token_exists = bool(payload.get("access_token"))
+        token = payload.get("token") or payload.get("access_token")
+        access_token_exists = bool(token)
         if not access_token_exists:
-            self.last_error = "Token response did not include access_token"
+            self.last_error = "Token response did not include token or access_token"
             return self._result(
                 token_issued=False,
                 access_token_exists=False,
@@ -110,20 +132,3 @@ class KiwoomAuth:
             "access_token_exists": access_token_exists,
             "errors": errors,
         }
-
-    @staticmethod
-    def _extract_error_message(response_body: str, fallback: str) -> str:
-        if not response_body.strip():
-            return fallback
-
-        try:
-            payload = json.loads(response_body)
-        except json.JSONDecodeError:
-            return response_body.strip()
-
-        if isinstance(payload, dict):
-            for key in ("message", "error_description", "error", "return_msg", "msg"):
-                value = payload.get(key)
-                if value:
-                    return str(value)
-        return str(payload)
