@@ -43,6 +43,7 @@ class KiwoomConfig:
 
 def load_config() -> KiwoomConfig:
     """Load Kiwoom configuration from environment variables using os.getenv()."""
+    load_dotenv(dotenv_path=Path(__file__).with_name(".env"), override=False)
     return KiwoomConfig(
         mode=os.getenv("KIWOOM_MODE", "real"),
         base_url=os.getenv("KIWOOM_BASE_URL", "https://api.kiwoom.com"),
