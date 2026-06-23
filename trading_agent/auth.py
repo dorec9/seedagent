@@ -24,7 +24,8 @@ class _RequestsAdapter:
 
     @staticmethod
     def post(url: str, *, json: dict[str, Any], headers: dict[str, str], timeout: float) -> _ResponseAdapter:
-        payload_bytes = __import__("json").dumps(json).encode("utf-8")
+        import json as jsonlib
+        payload_bytes = jsonlib.dumps(json).encode("utf-8")
         token_request = request.Request(
             url,
             data=payload_bytes,
