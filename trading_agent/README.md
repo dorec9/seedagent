@@ -50,7 +50,7 @@ Python 기반 키움 REST API 자동매매 시스템의 초기 인증 모듈입�
 3. 인증 확인 프로그램을 실행합니다.
 
    ```bash
-   python main.py
+   python trading_agent/main.py
    ```
 
 ## 출력 예시
