@@ -77,7 +77,7 @@ class KiwoomAuth:
                 timeout=self.timeout,
             )
         except _RequestsAdapter.RequestException as exc:
-            self.last_error = exc.__class__.__name__
+            self.last_error = str(exc)
             return self._result(
                 token_issued=False,
                 access_token_exists=False,
