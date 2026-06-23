@@ -34,7 +34,7 @@ Python 기반 키움 REST API 자동매매 시스템의 초기 인증 모듈입�
 1. 의존성을 설치합니다.
 
    ```bash
-   pip install -r requirements.txt
+   pip install -r trading_agent/requirements.txt
    ```
 
 2. 환경변수를 설정합니다. 로컬 실행 시에는 `.env.example`을 참고해 값을 준비한 뒤 셸 환경에 export합니다.
