@@ -259,3 +259,61 @@ for result in results:
 - `access_token`, `DATABASE_URL`, DB 비밀번호는 로그에 남기지 않습니다.
 - 실제 운영 전에는 장 운영시간 체크, 토큰 만료 갱신, 장애 복구 로직이 추가로 필요합니다.
 - 이번 단계에서는 조회, 저장, 반복 실행까지만 구현하며 매수/매도 주문은 수행하지 않습니다.
+
+## Candidate Feature & Rule Signal Engine 사용 예시
+
+`CandidateFilter`는 PostgreSQL `price_snapshots`에 저장된 최근 시세 스냅샷을 읽어 가격 변화율, 거래량 증가량, 변동성, 가격 위치, 최신 데이터 여부를 계산하고 규칙 기반 매수 후보 신호를 생성합니다. 이 기능은 모델링 가능한 피처와 후보 필터링 결과만 제공하며 실제 주문은 실행하지 않습니다.
+
+```python
+from trading_agent.config import load_config
+from trading_agent.storage import QuoteSnapshotStore
+from trading_agent.signals import CandidateFilter, CandidateFilterConfig
+
+config = load_config()
+
+store = QuoteSnapshotStore(config.database_url)
+
+candidate_filter = CandidateFilter(
+    store=store,
+    config=CandidateFilterConfig(
+        lookback_minutes=5.0,
+        min_price_change_pct=1.0,
+        max_price_change_pct=8.0,
+        min_volume_delta=10000,
+        min_current_price=1000,
+        max_current_price=500000,
+        min_snapshot_count=2,
+        max_latest_age_seconds=30.0,
+    ),
+)
+
+signals = candidate_filter.evaluate(["005930", "000660", "035420"])
+
+for signal in signals:
+    print(
+        signal.stock_code,
+        signal.current_price,
+        signal.features.return_pct,
+        signal.features.volume_delta,
+        signal.features.volatility_pct,
+        signal.features.price_position_pct,
+        signal.rule_score,
+        signal.model_score,
+        signal.passed,
+        signal.reasons,
+    )
+
+candidates = candidate_filter.get_candidates(["005930", "000660", "035420"])
+
+for candidate in candidates:
+    print("candidate:", candidate.stock_code, candidate.features.return_pct, candidate.rule_score)
+```
+
+### Candidate Feature & Rule Signal Engine 주의사항
+
+- 이 기능은 매수 후보 필터링일 뿐 실제 주문을 실행하지 않습니다.
+- 조건을 통과한 종목이 반드시 좋은 투자 대상이라는 뜻은 아닙니다.
+- REST polling 기반 스냅샷 데이터는 틱 단위 실시간 데이터가 아닙니다.
+- 너무 짧은 `lookback_minutes`나 너무 낮은 조건값은 노이즈가 많은 후보를 만들 수 있습니다.
+- `model_score`는 현재 `None`입니다. 머신러닝 모델은 이후 Feature에서 추가합니다.
+- 실제 주문 전에는 주문 전 안전장치, 계좌 잔고 확인, 보유 종목 중복 확인, 일일 손실 제한, 주문 수량 제한이 필요합니다.
