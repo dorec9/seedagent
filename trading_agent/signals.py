@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 try:
-    from .storage import QuoteSnapshotStore, StorageError
+    from .storage import QuoteSnapshotStore
 except ImportError:  # pragma: no cover - supports direct script-style imports
-    from storage import QuoteSnapshotStore, StorageError
+    from storage import QuoteSnapshotStore
 
 
 @dataclass(frozen=True)
@@ -23,6 +23,7 @@ class CandidateFilterConfig:
     min_current_price: int | None = 1000
     max_current_price: int | None = 500000
     min_snapshot_count: int = 2
+    max_snapshots_per_window: int = 1000
     max_latest_age_seconds: float | None = 30.0
 
     def __post_init__(self) -> None:
@@ -46,6 +47,10 @@ class CandidateFilterConfig:
             raise ValueError("max_price_change_pct must be greater than or equal to min_price_change_pct")
         if self.max_latest_age_seconds is not None and self.max_latest_age_seconds <= 0:
             raise ValueError("max_latest_age_seconds must be greater than 0")
+        if self.max_snapshots_per_window <= 0:
+            raise ValueError("max_snapshots_per_window must be greater than 0")
+        if self.max_snapshots_per_window < self.min_snapshot_count:
+            raise ValueError("max_snapshots_per_window must be greater than or equal to min_snapshot_count")
 
 
 @dataclass(frozen=True)
@@ -91,7 +96,9 @@ class CandidateFilter:
         evaluated_at = _ensure_aware_utc(now)
         window_start_at = evaluated_at - timedelta(minutes=self.config.lookback_minutes)
 
-        snapshots = self.store.get_recent_snapshots(stock_code, since=window_start_at)
+        snapshots = self.store.get_recent_snapshots(
+            stock_code, since=window_start_at, limit=self.config.max_snapshots_per_window
+        )
         if len(snapshots) < self.config.min_snapshot_count:
             return None
 
@@ -138,9 +145,10 @@ class CandidateFilter:
         )
 
     def evaluate(self, stock_codes: list[str], now: datetime | None = None) -> list[CandidateSignal]:
+        evaluated_at = _ensure_aware_utc(now) if now is not None else datetime.now(timezone.utc)
         signals: list[CandidateSignal] = []
         for stock_code in stock_codes:
-            signal = self.evaluate_stock(stock_code, now=now)
+            signal = self.evaluate_stock(stock_code, now=evaluated_at)
             if signal is not None:
                 signals.append(signal)
         return signals
