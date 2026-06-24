@@ -8,7 +8,10 @@ from dataclasses import dataclass
 from typing import Any
 from urllib import error, request
 
-from config import KiwoomConfig
+try:
+    from .config import KiwoomConfig
+except ImportError:  # pragma: no cover - supports direct script-style imports
+    from config import KiwoomConfig
 
 
 @dataclass(frozen=True)

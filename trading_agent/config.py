@@ -18,6 +18,7 @@ class KiwoomConfig:
     app_env: str
     appkey: str | None
     secretkey: str | None
+    database_url: str | None = None
 
     @property
     def base_url_loaded(self) -> bool:
@@ -43,11 +44,12 @@ class KiwoomConfig:
 
 def load_config() -> KiwoomConfig:
     """Load Kiwoom configuration from environment variables using os.getenv()."""
-    load_dotenv(dotenv_path=Path(__file__).with_name(".env"), override=False)
+    load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env", override=False)
     return KiwoomConfig(
         mode=os.getenv("KIWOOM_MODE", "real"),
         base_url=os.getenv("KIWOOM_BASE_URL", "https://api.kiwoom.com"),
         app_env=os.getenv("APP_ENV", "codex"),
         appkey=os.getenv("KIWOOM_APPKEY"),
         secretkey=os.getenv("KIWOOM_SECRETKEY"),
+        database_url=os.getenv("DATABASE_URL"),
     )

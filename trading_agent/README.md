@@ -128,3 +128,86 @@ quotes = market_data.get_stock_quotes(["005930", "000660", "035420"], access_tok
 for quote in quotes:
     print(quote.stock_code, quote.stock_name, quote.current_price)
 ```
+
+## PostgreSQL 시세 스냅샷 저장
+
+시세 스냅샷 저장소는 SQLite가 아니라 PostgreSQL을 사용합니다. 로컬 개발에서는 PostgreSQL을 직접 설치하지 않고 Docker Compose로 실행합니다. 실제 `.env`, API 키, DB 비밀번호, Kiwoom access token은 커밋하지 않고, Git에는 `.env.example`만 포함합니다.
+
+### PostgreSQL 실행
+
+1. 예시 환경 파일을 복사해 로컬 `.env`를 만듭니다.
+
+   ```bash
+   cp .env.example .env
+   ```
+
+2. 필요하면 `.env`의 DB 연결 정보를 조정합니다. 기본 예시는 다음과 같습니다.
+
+   ```dotenv
+   DATABASE_URL=postgresql://postgres:postgres@localhost:5432/trading_agent
+   TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/trading_agent
+   POSTGRES_USER=postgres
+   POSTGRES_PASSWORD=postgres
+   POSTGRES_DB=trading_agent
+   ```
+
+3. Docker Compose로 PostgreSQL을 실행합니다.
+
+   ```bash
+   docker compose up -d
+   ```
+
+4. 컨테이너 실행 상태를 확인합니다.
+
+   ```bash
+   docker ps
+   ```
+
+### 현재가 조회 후 PostgreSQL 저장 예시
+
+```python
+from trading_agent.config import load_config
+from trading_agent.auth import KiwoomAuth
+from trading_agent.market_data import KiwoomMarketData
+from trading_agent.storage import QuoteSnapshotStore
+
+config = load_config()
+
+auth = KiwoomAuth(config)
+token_result = auth.issue_access_token()
+
+market_data = KiwoomMarketData(config)
+quotes = market_data.get_stock_quotes(["005930", "000660"], token_result.access_token)
+
+store = QuoteSnapshotStore(config.database_url)
+store.initialize()
+store.save_quotes(quotes)
+
+latest = store.get_latest_quote("005930")
+print(latest.stock_code, latest.current_price, latest.observed_at)
+```
+
+`QuoteSnapshotStore.initialize()`는 `price_snapshots` 테이블과 `(stock_code, observed_at DESC)` 인덱스를 생성합니다. `observed_at`은 timezone-aware UTC `datetime`으로 저장되고, Kiwoom 원본 응답은 PostgreSQL `JSONB`에 저장됩니다.
+
+### 테스트 실행
+
+PostgreSQL 서버가 없어도 기본 테스트는 실패하지 않아야 합니다. `TEST_DATABASE_URL`이 없으면 storage integration test는 skip됩니다.
+
+```bash
+python -m pytest
+```
+
+PostgreSQL integration test까지 실행하려면 Docker Compose로 PostgreSQL을 띄운 뒤 `TEST_DATABASE_URL`을 지정합니다.
+
+```bash
+docker compose up -d
+TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/trading_agent python -m pytest
+```
+
+### 보안 주의사항
+
+- `.env`는 Git에 올리지 않습니다.
+- `.env.example`만 Git에 올립니다.
+- 실제 API 키, DB 비밀번호, access token은 커밋하지 않습니다.
+- PostgreSQL이 없어도 기본 테스트는 통과해야 합니다.
+- `TEST_DATABASE_URL`이 있을 때만 storage integration test가 실행됩니다.
