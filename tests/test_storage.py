@@ -205,3 +205,89 @@ def test_get_latest_quotes_excludes_stocks_without_history(store):
 
 def test_get_latest_quotes_empty_input_returns_empty_dict(store):
     assert store.get_latest_quotes([]) == {}
+
+def test_get_snapshots_between_returns_observed_at_ascending(store):
+    t1 = datetime(2026, 6, 24, 9, 0, tzinfo=timezone.utc)
+    t2 = t1 + timedelta(minutes=1)
+    t3 = t1 + timedelta(minutes=2)
+    store.save_quote(make_quote(current_price=101), observed_at=t2)
+    store.save_quote(make_quote(current_price=100), observed_at=t1)
+    store.save_quote(make_quote(current_price=102), observed_at=t3)
+
+    snapshots = store.get_snapshots_between("005930")
+
+    assert [snapshot.current_price for snapshot in snapshots] == [100, 101, 102]
+
+
+def test_get_snapshots_between_filters_start(store):
+    base = datetime(2026, 6, 24, 9, 0, tzinfo=timezone.utc)
+    for idx in range(3):
+        store.save_quote(make_quote(current_price=100 + idx), observed_at=base + timedelta(minutes=idx))
+
+    snapshots = store.get_snapshots_between("005930", start=base + timedelta(minutes=1))
+
+    assert [snapshot.current_price for snapshot in snapshots] == [101, 102]
+
+
+def test_get_snapshots_between_filters_end(store):
+    base = datetime(2026, 6, 24, 9, 0, tzinfo=timezone.utc)
+    for idx in range(3):
+        store.save_quote(make_quote(current_price=100 + idx), observed_at=base + timedelta(minutes=idx))
+
+    snapshots = store.get_snapshots_between("005930", end=base + timedelta(minutes=1))
+
+    assert [snapshot.current_price for snapshot in snapshots] == [100, 101]
+
+
+def test_get_snapshots_between_filters_start_and_end(store):
+    base = datetime(2026, 6, 24, 9, 0, tzinfo=timezone.utc)
+    for idx in range(4):
+        store.save_quote(make_quote(current_price=100 + idx), observed_at=base + timedelta(minutes=idx))
+
+    snapshots = store.get_snapshots_between("005930", start=base + timedelta(minutes=1), end=base + timedelta(minutes=2))
+
+    assert [snapshot.current_price for snapshot in snapshots] == [101, 102]
+
+
+def test_get_snapshots_between_applies_limit(store):
+    base = datetime(2026, 6, 24, 9, 0, tzinfo=timezone.utc)
+    for idx in range(3):
+        store.save_quote(make_quote(current_price=100 + idx), observed_at=base + timedelta(minutes=idx))
+
+    snapshots = store.get_snapshots_between("005930", limit=2)
+
+    assert [snapshot.current_price for snapshot in snapshots] == [100, 101]
+
+
+def test_get_snapshots_between_limit_must_be_positive(store):
+    with pytest.raises(ValueError):
+        store.get_snapshots_between("005930", limit=0)
+
+
+def test_get_snapshots_between_returns_empty_for_unknown_stock(store):
+    assert store.get_snapshots_between("999999") == []
+
+
+def test_get_snapshots_between_treats_naive_datetime_as_utc(store):
+    aware = datetime(2026, 6, 24, 9, 0, tzinfo=timezone.utc)
+    store.save_quote(make_quote(current_price=100), observed_at=aware)
+
+    snapshots = store.get_snapshots_between("005930", start=datetime(2026, 6, 24, 9, 0), end=datetime(2026, 6, 24, 9, 0))
+
+    assert len(snapshots) == 1
+    assert snapshots[0].observed_at == aware
+
+
+def test_get_snapshots_between_converts_timezone_aware_datetime_to_utc(store):
+    plus_nine = timezone(timedelta(hours=9))
+    aware = datetime(2026, 6, 24, 0, 0, tzinfo=timezone.utc)
+    store.save_quote(make_quote(current_price=100), observed_at=aware)
+
+    snapshots = store.get_snapshots_between(
+        "005930",
+        start=datetime(2026, 6, 24, 9, 0, tzinfo=plus_nine),
+        end=datetime(2026, 6, 24, 9, 0, tzinfo=plus_nine),
+    )
+
+    assert len(snapshots) == 1
+    assert snapshots[0].observed_at == aware

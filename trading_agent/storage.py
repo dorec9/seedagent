@@ -240,6 +240,44 @@ class QuoteSnapshotStore:
 
         return [_row_to_snapshot(row) for row in rows]
 
+
+    def get_snapshots_between(
+        self,
+        stock_code: str,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int = 10000,
+    ) -> list[QuoteSnapshot]:
+        """Return snapshots for one stock in a time range ordered oldest to newest."""
+        if limit <= 0:
+            raise ValueError("limit must be greater than 0")
+        start_utc = _ensure_aware_utc(start) if start is not None else None
+        end_utc = _ensure_aware_utc(end) if end is not None else None
+
+        try:
+            with self._connect() as conn:
+                with conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute(
+                        """
+                        SELECT id, stock_code, stock_name, current_price, change_price,
+                               change_rate, volume, observed_at, raw
+                        FROM price_snapshots
+                        WHERE stock_code = %s
+                          AND (%s::timestamptz IS NULL OR observed_at >= %s)
+                          AND (%s::timestamptz IS NULL OR observed_at <= %s)
+                        ORDER BY observed_at ASC, id ASC
+                        LIMIT %s
+                        """,
+                        (stock_code, start_utc, start_utc, end_utc, end_utc, limit),
+                    )
+                    rows = cur.fetchall()
+        except Exception as exc:
+            if _is_database_error(exc):
+                raise StorageError("Failed to read quote snapshots") from None
+            raise
+
+        return [_row_to_snapshot(row) for row in rows]
+
     def get_latest_quotes(self, stock_codes: list[str]) -> dict[str, QuoteSnapshot]:
         """Return latest snapshots for multiple stock codes keyed by stock code."""
         unique_codes = list(dict.fromkeys(stock_codes))
