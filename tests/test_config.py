@@ -48,3 +48,11 @@ def test_load_config_allows_missing_appkey_or_secretkey(monkeypatch):
         "KIWOOM_APPKEY is missing",
         "KIWOOM_SECRETKEY is missing",
     ]
+
+
+def test_load_config_reads_optional_database_url(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:password@localhost:5432/app")
+
+    config = load_config()
+
+    assert config.database_url == "postgresql://user:password@localhost:5432/app"
