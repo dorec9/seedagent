@@ -61,6 +61,7 @@ def test_candidate_filter_config_defaults():
     assert config.min_current_price == 1000
     assert config.max_current_price == 500000
     assert config.min_snapshot_count == 2
+    assert config.max_snapshots_per_window == 1000
     assert config.max_latest_age_seconds == 30.0
 
 
@@ -74,6 +75,9 @@ def test_candidate_filter_config_defaults():
     {"min_current_price": 2000, "max_current_price": 1000},
     {"min_price_change_pct": 2.0, "max_price_change_pct": 1.0},
     {"max_latest_age_seconds": 0},
+    {"max_snapshots_per_window": 0},
+    {"max_snapshots_per_window": -1},
+    {"min_snapshot_count": 5, "max_snapshots_per_window": 3},
 ])
 def test_candidate_filter_config_validation(kwargs):
     with pytest.raises(ValueError):
@@ -206,3 +210,20 @@ def test_empty_evaluate_and_get_candidates_return_empty_lists():
     filt = CandidateFilter(FakeStore(), CandidateFilterConfig())
     assert filt.evaluate([], now=NOW) == []
     assert filt.get_candidates([], now=NOW) == []
+
+
+def test_evaluate_stock_passes_configured_limit_to_store():
+    store = FakeStore({"005930": passing_snapshots()})
+    config = CandidateFilterConfig(min_volume_delta=100, max_snapshots_per_window=500)
+    CandidateFilter(store, config).evaluate_stock("005930", now=NOW)
+    assert store.calls[0][2] == 500
+
+
+def test_evaluate_uses_same_window_start_for_all_stocks():
+    store = FakeStore({
+        "A": passing_snapshots("A"),
+        "B": passing_snapshots("B"),
+    })
+    signals = CandidateFilter(store, CandidateFilterConfig(min_volume_delta=100)).evaluate(["A", "B"], now=NOW)
+    assert len(signals) == 2
+    assert signals[0].window_start_at == signals[1].window_start_at
