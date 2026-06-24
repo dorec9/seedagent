@@ -247,7 +247,7 @@ collector = QuotePollingCollector(
     ),
 )
 
-results = collector.run(token_result.access_token)
+results = collector.run(access_token)
 
 for result in results:
     print(result.iteration, result.requested_count, result.saved_count, result.snapshot_ids)
