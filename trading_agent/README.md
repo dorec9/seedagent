@@ -112,17 +112,19 @@ print(quote.current_price)
 `get_stock_quotes`는 단일 종목 조회와 동일한 `StockQuote` 목록을 입력한 종목코드 순서대로 반환합니다. 중복 종목코드도 입력 순서대로 각각 조회하며, 기본 정책은 fail-fast이므로 개별 종목 조회 중 `KiwoomAPIError`가 발생하면 즉시 예외를 발생시키고 남은 종목은 조회하지 않습니다. 과도한 API 호출을 피해야 하는 경우 `delay_seconds`를 양수로 지정해 각 요청 사이에 대기 시간을 둘 수 있습니다.
 
 ```python
-from trading_agent.config import load_config
-from trading_agent.auth import KiwoomAuth
-from trading_agent.market_data import KiwoomMarketData
+from config import load_config
+from auth import KiwoomAuth
+from market_data import KiwoomMarketData
 
 config = load_config()
 auth = KiwoomAuth(config)
-token_result = auth.issue_access_token()
+auth.issue_access_token()
+
+# KiwoomAuth.issue_access_token() currently returns only metadata and does not expose the token.
+access_token = "<YOUR_KIWOOM_ACCESS_TOKEN>"
 
 market_data = KiwoomMarketData(config)
-quotes = market_data.get_stock_quotes(["005930", "000660", "035420"], token_result.access_token)
-
+quotes = market_data.get_stock_quotes(["005930", "000660", "035420"], access_token)
 for quote in quotes:
     print(quote.stock_code, quote.stock_name, quote.current_price)
 ```
