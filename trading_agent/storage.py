@@ -115,7 +115,7 @@ class QuoteSnapshotStore:
             raise
         except Exception as exc:
             if _is_database_error(exc):
-                raise StorageError("Failed to save quote snapshot") from exc
+                raise StorageError("Failed to save quote snapshot") from None
             raise
 
     def save_quotes(self, quotes: list[StockQuote], observed_at: datetime | None = None) -> list[int]:
