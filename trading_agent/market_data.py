@@ -167,4 +167,6 @@ def _parse_float(value: Any) -> float:
     cleaned = str(value).strip().replace(",", "").replace("%", "")
     if cleaned.startswith("+"):
         cleaned = cleaned[1:]
+    if cleaned in ("", "+", "-"):
+        return 0.0
     return float(cleaned)
