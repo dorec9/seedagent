@@ -436,3 +436,71 @@ print(result.metrics)
 - 수수료, 슬리피지, 체결 실패, 호가 공백은 아직 반영하지 않았습니다.
 - label 불균형이 심하면 accuracy만 보고 판단하면 안 됩니다.
 - precision, recall, roc_auc를 함께 봐야 합니다.
+
+## Historical OHLCV Backfill
+
+Historical OHLCV bars are intended for model-training dataset generation. They complement, but do not replace, live polling snapshots: historical OHLCV gives the trainer enough past bars to compute leak-free features and labels, while live `price_snapshots` remain the real-time operating data captured by the polling collector.
+
+### 일봉 데이터 조회 예시
+
+```python
+from datetime import date
+
+from trading_agent.config import KiwoomConfig
+from trading_agent.ohlcv import KiwoomHistoricalMarketData
+
+client = KiwoomHistoricalMarketData(KiwoomConfig(mode="real", base_url="https://api.kiwoom.com", app_env="local", appkey=None, secretkey=None))
+bars = client.get_daily_ohlcv(
+    stock_code="005930",
+    access_token="<KIWOOM_ACCESS_TOKEN>",
+    start_date=date(2025, 1, 1),
+    end_date=date(2025, 12, 31),
+)
+```
+
+### 여러 종목 OHLCV backfill 저장 예시
+
+```python
+from datetime import date
+
+from trading_agent.config import KiwoomConfig
+from trading_agent.ohlcv import OhlcvBackfillConfig, OhlcvBackfillRunner, KiwoomHistoricalMarketData
+from trading_agent.storage import QuoteSnapshotStore
+
+store = QuoteSnapshotStore("postgresql://postgres:postgres@localhost:5432/trading_agent")
+store.initialize_ohlcv()
+
+runner = OhlcvBackfillRunner(
+    market_data=KiwoomHistoricalMarketData(KiwoomConfig(mode="real", base_url="https://api.kiwoom.com", app_env="local", appkey=None, secretkey=None)),
+    store=store,
+    config=OhlcvBackfillConfig(
+        stock_codes=("005930", "000660"),
+        interval="1d",
+        start_date=date(2025, 1, 1),
+        end_date=date(2025, 12, 31),
+    ),
+)
+results = runner.run(access_token="<KIWOOM_ACCESS_TOKEN>")
+```
+
+### OHLCV 기반 `training_dataset.csv` 생성 예시
+
+```python
+from trading_agent.ohlcv import OhlcvTrainingDatasetBuilder, OhlcvTrainingDatasetConfig
+from trading_agent.storage import QuoteSnapshotStore
+
+store = QuoteSnapshotStore("postgresql://postgres:postgres@localhost:5432/trading_agent")
+builder = OhlcvTrainingDatasetBuilder(
+    store=store,
+    config=OhlcvTrainingDatasetConfig(
+        interval="1d",
+        lookback_bars=20,
+        prediction_horizon_bars=5,
+        target_return_pct=1.0,
+    ),
+)
+examples = builder.build(["005930", "000660"])
+builder.write_csv(examples, "training_dataset.csv")
+```
+
+> ⚠️ Validation 성능은 실제 매매 수익을 보장하지 않습니다. 실거래 전에는 수수료, 세금, 슬리피지, 체결 실패를 반영한 별도 백테스트와 검증이 필요합니다. 이 기능은 주문 실행, 계좌 조회, paper trading, 실거래, 백테스트 엔진을 포함하지 않습니다.
