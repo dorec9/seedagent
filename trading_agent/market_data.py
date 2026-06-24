@@ -154,6 +154,8 @@ def _parse_int(value: Any) -> int:
     cleaned = str(value).strip().replace(",", "")
     if cleaned.startswith("+"):
         cleaned = cleaned[1:]
+    if cleaned in ("", "+", "-"):
+        return 0
     return int(cleaned)
 
 
