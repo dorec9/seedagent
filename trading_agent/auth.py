@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator, Mapping
+from dataclasses import asdict, dataclass
 from typing import Any
 from urllib import error, request
 
@@ -47,6 +49,36 @@ class _RequestsAdapter:
 requests = _RequestsAdapter()
 
 
+@dataclass(frozen=True)
+class TokenResult(Mapping[str, Any]):
+    """Token issuance result with a raw token for internal use only."""
+
+    system: str
+    mode: str
+    base_url_loaded: bool
+    appkey_loaded: bool
+    secretkey_loaded: bool
+    token_issued: bool
+    access_token_exists: bool
+    errors: list[str]
+    access_token: str | None = None
+
+    def __getitem__(self, key: str) -> Any:
+        return getattr(self, key)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(asdict(self))
+
+    def __len__(self) -> int:
+        return len(asdict(self))
+
+    def to_public_dict(self) -> dict[str, Any]:
+        """Return CLI/log-safe metadata without the raw access token."""
+        public_result = asdict(self)
+        public_result.pop("access_token", None)
+        return public_result
+
+
 class KiwoomAuth:
     """Issue Kiwoom REST API access tokens without logging sensitive values."""
 
@@ -58,8 +90,8 @@ class KiwoomAuth:
         self.last_status_code: int | None = None
         self.last_error: str | None = None
 
-    def issue_access_token(self) -> dict[str, Any]:
-        """Request an access token and return only success metadata."""
+    def issue_access_token(self) -> TokenResult:
+        """Request an access token and return safe metadata plus the raw token for callers."""
         errors = self.config.validation_errors()
         if errors:
             self.last_error = "; ".join(errors)
@@ -79,12 +111,12 @@ class KiwoomAuth:
                 headers={"Accept": "application/json"},
                 timeout=self.timeout,
             )
-        except _RequestsAdapter.RequestException as exc:
-            self.last_error = str(exc)
+        except _RequestsAdapter.RequestException:
+            self.last_error = "Token request failed"
             return self._result(
                 token_issued=False,
                 access_token_exists=False,
-                errors=[f"Token request failed: {self.last_error}"],
+                errors=[self.last_error],
             )
 
         self.last_status_code = response.status_code
@@ -117,7 +149,7 @@ class KiwoomAuth:
             )
 
         self.last_error = None
-        return self._result(token_issued=True, access_token_exists=True, errors=[])
+        return self._result(token_issued=True, access_token_exists=True, errors=[], access_token=str(token))
 
     def _result(
         self,
@@ -125,14 +157,16 @@ class KiwoomAuth:
         token_issued: bool,
         access_token_exists: bool,
         errors: list[str],
-    ) -> dict[str, Any]:
-        return {
-            "system": "OK" if token_issued and access_token_exists and not errors else "ERROR",
-            "mode": self.config.mode,
-            "base_url_loaded": self.config.base_url_loaded,
-            "appkey_loaded": self.config.appkey_loaded,
-            "secretkey_loaded": self.config.secretkey_loaded,
-            "token_issued": token_issued,
-            "access_token_exists": access_token_exists,
-            "errors": errors,
-        }
+        access_token: str | None = None,
+    ) -> TokenResult:
+        return TokenResult(
+            system="OK" if token_issued and access_token_exists and not errors else "ERROR",
+            mode=self.config.mode,
+            base_url_loaded=self.config.base_url_loaded,
+            appkey_loaded=self.config.appkey_loaded,
+            secretkey_loaded=self.config.secretkey_loaded,
+            token_issued=token_issued,
+            access_token_exists=access_token_exists,
+            errors=errors,
+            access_token=access_token,
+        )
