@@ -56,6 +56,8 @@ class _RequestsAdapter:
                 return _ResponseAdapter(response.status, response.read().decode("utf-8"))
         except error.HTTPError as exc:
             return _ResponseAdapter(exc.code, exc.read().decode("utf-8", errors="replace"))
+        except TimeoutError as exc:
+            raise
         except (error.URLError, OSError) as exc:
             raise _RequestsAdapter.RequestException(str(exc)) from exc
 
