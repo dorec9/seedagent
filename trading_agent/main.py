@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 
-from auth import KiwoomAuth
-from config import load_config
+from trading_agent.auth import KiwoomAuth
+from trading_agent.config import load_config
 
 
 def main() -> None:

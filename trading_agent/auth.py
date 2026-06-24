@@ -6,7 +6,7 @@ import json
 from typing import Any
 from urllib import error, request
 
-from config import KiwoomConfig
+from trading_agent.config import KiwoomConfig
 
 
 class _ResponseAdapter:
