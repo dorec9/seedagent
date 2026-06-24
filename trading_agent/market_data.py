@@ -97,8 +97,8 @@ class KiwoomMarketData:
             )
         except TimeoutError as exc:
             raise KiwoomAPIError(f"Stock quote request failed for stock_code={stk_cd}: timed out") from exc
-        except Exception as exc:
-            raise KiwoomAPIError(f"Stock quote request failed for stock_code={stk_cd}") from exc
+        except _RequestsAdapter.RequestException as exc:
+            raise KiwoomAPIError(f"Stock quote request failed for stock_code={stk_cd}: {exc}") from exc
 
         if response.status_code < 200 or response.status_code >= 300:
             raise KiwoomAPIError(
