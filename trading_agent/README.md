@@ -211,3 +211,51 @@ TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/trading_agent py
 - 실제 API 키, DB 비밀번호, access token은 커밋하지 않습니다.
 - PostgreSQL이 없어도 기본 테스트는 통과해야 합니다.
 - `TEST_DATABASE_URL`이 있을 때만 storage integration test가 실행됩니다.
+
+## Polling Collector 사용 예시
+
+`QuotePollingCollector`는 관심종목 리스트를 일정 간격으로 REST polling 조회한 뒤, 조회된 현재가 스냅샷을 PostgreSQL에 저장합니다. 이 수집기는 REST polling 기반 준실시간 수집기이며, 틱 단위 실시간 체결/호가 스트리밍은 아직 구현하지 않습니다.
+
+```python
+from trading_agent.config import load_config
+from trading_agent.auth import KiwoomAuth
+from trading_agent.market_data import KiwoomMarketData
+from trading_agent.storage import QuoteSnapshotStore
+from trading_agent.collector import QuotePollingCollector, QuotePollingConfig
+
+config = load_config()
+
+auth = KiwoomAuth(config)
+auth.issue_access_token()
+
+# KiwoomAuth.issue_access_token() currently returns only metadata and does not expose the token.
+access_token = "<YOUR_KIWOOM_ACCESS_TOKEN>"
+
+market_data = KiwoomMarketData(config)
+
+store = QuoteSnapshotStore(config.database_url)
+store.initialize()
+
+collector = QuotePollingCollector(
+    market_data=market_data,
+    store=store,
+    config=QuotePollingConfig(
+        stock_codes=["005930", "000660"],
+        interval_seconds=5.0,
+        per_request_delay_seconds=0.2,
+        max_iterations=10,
+    ),
+)
+
+results = collector.run(access_token)
+
+for result in results:
+    print(result.iteration, result.requested_count, result.saved_count, result.snapshot_ids)
+```
+
+### Polling Collector 주의사항
+
+- 너무 짧은 `interval_seconds`는 Kiwoom API 제한이나 과도한 요청 문제를 만들 수 있으므로 주의해야 합니다.
+- `access_token`, `DATABASE_URL`, DB 비밀번호는 로그에 남기지 않습니다.
+- 실제 운영 전에는 장 운영시간 체크, 토큰 만료 갱신, 장애 복구 로직이 추가로 필요합니다.
+- 이번 단계에서는 조회, 저장, 반복 실행까지만 구현하며 매수/매도 주문은 수행하지 않습니다.
