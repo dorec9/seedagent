@@ -58,7 +58,7 @@ def test_quote_polling_config_validates_invalid_values(kwargs):
 def test_quote_polling_config_preserves_order_and_duplicates():
     config = QuotePollingConfig(stock_codes=["005930", "000660", "005930"])
 
-    assert config.stock_codes == ["005930", "000660", "005930"]
+    assert config.stock_codes == ("005930", "000660", "005930")
 
 
 def test_collect_once_fetches_and_saves_quotes():
@@ -72,7 +72,7 @@ def test_collect_once_fetches_and_saves_quotes():
     result = collector.collect_once(TOKEN, iteration=7)
 
     market_data.get_stock_quotes.assert_called_once_with(
-        ["005930", "000660"],
+        ("005930", "000660"),
         TOKEN,
         delay_seconds=0.2,
     )
