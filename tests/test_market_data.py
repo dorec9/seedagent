@@ -1,6 +1,6 @@
 import sys
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -113,3 +113,91 @@ def test_get_stock_quote_raises_on_request_error_without_token(monkeypatch):
 
     assert "Stock quote request failed" in str(exc_info.value)
     assert TOKEN not in str(exc_info.value)
+
+
+def make_quote(stock_code):
+    return StockQuote(
+        stock_code=stock_code,
+        stock_name=f"name-{stock_code}",
+        current_price=1000,
+        change_price=10,
+        change_rate=1.0,
+        volume=100,
+        raw={"return_code": 0, "stk_cd": stock_code},
+    )
+
+
+def test_get_stock_quotes_returns_empty_list_for_empty_input():
+    market_data = KiwoomMarketData(make_config())
+
+    assert market_data.get_stock_quotes([], TOKEN) == []
+
+
+def test_get_stock_quotes_calls_get_stock_quote_in_input_order(monkeypatch):
+    calls = []
+
+    def fake_get_stock_quote(self, stk_cd, access_token):
+        calls.append((stk_cd, access_token))
+        return make_quote(stk_cd)
+
+    monkeypatch.setattr(KiwoomMarketData, "get_stock_quote", fake_get_stock_quote)
+
+    quotes = KiwoomMarketData(make_config()).get_stock_quotes(["005930", "000660", "005930"], TOKEN)
+
+    assert calls == [("005930", TOKEN), ("000660", TOKEN), ("005930", TOKEN)]
+    assert [quote.stock_code for quote in quotes] == ["005930", "000660", "005930"]
+
+
+def test_get_stock_quotes_returns_stock_quote_list(monkeypatch):
+    monkeypatch.setattr(
+        KiwoomMarketData,
+        "get_stock_quote",
+        lambda self, stk_cd, access_token: make_quote(stk_cd),
+    )
+
+    quotes = KiwoomMarketData(make_config()).get_stock_quotes(["005930", "000660"], TOKEN)
+
+    assert isinstance(quotes, list)
+    assert all(isinstance(quote, StockQuote) for quote in quotes)
+
+
+def test_get_stock_quotes_fail_fast_on_kiwoom_api_error_without_token(monkeypatch):
+    calls = []
+
+    def fake_get_stock_quote(self, stk_cd, access_token):
+        calls.append(stk_cd)
+        if stk_cd == "000660":
+            raise KiwoomAPIError("quote lookup failed for stock_code=000660")
+        return make_quote(stk_cd)
+
+    monkeypatch.setattr(KiwoomMarketData, "get_stock_quote", fake_get_stock_quote)
+
+    with pytest.raises(KiwoomAPIError) as exc_info:
+        KiwoomMarketData(make_config()).get_stock_quotes(["005930", "000660", "035420"], TOKEN)
+
+    assert calls == ["005930", "000660"]
+    assert TOKEN not in str(exc_info.value)
+
+
+def test_get_stock_quotes_raises_value_error_for_negative_delay_seconds(monkeypatch):
+    get_stock_quote = Mock(return_value=make_quote("005930"))
+    monkeypatch.setattr(KiwoomMarketData, "get_stock_quote", get_stock_quote)
+
+    with pytest.raises(ValueError):
+        KiwoomMarketData(make_config()).get_stock_quotes(["005930"], TOKEN, delay_seconds=-0.1)
+
+    get_stock_quote.assert_not_called()
+
+
+def test_get_stock_quotes_sleeps_between_requests_when_delay_is_positive(monkeypatch):
+    monkeypatch.setattr(
+        KiwoomMarketData,
+        "get_stock_quote",
+        lambda self, stk_cd, access_token: make_quote(stk_cd),
+    )
+    sleep = Mock()
+    monkeypatch.setattr("market_data.time.sleep", sleep)
+
+    KiwoomMarketData(make_config()).get_stock_quotes(["005930", "000660", "035420"], TOKEN, delay_seconds=0.25)
+
+    assert sleep.call_args_list == [call(0.25), call(0.25)]
