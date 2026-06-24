@@ -317,3 +317,48 @@ for candidate in candidates:
 - 너무 짧은 `lookback_minutes`나 너무 낮은 조건값은 노이즈가 많은 후보를 만들 수 있습니다.
 - `model_score`는 현재 `None`입니다. 머신러닝 모델은 이후 Feature에서 추가합니다.
 - 실제 주문 전에는 주문 전 안전장치, 계좌 잔고 확인, 보유 종목 중복 확인, 일일 손실 제한, 주문 수량 제한이 필요합니다.
+
+## Historical Training Dataset Builder 사용 예시
+
+`TrainingDatasetBuilder`는 PostgreSQL `price_snapshots`에 저장된 과거 스냅샷을 읽어 각 평가 시점의 과거 lookback window 기반 feature와 미래 horizon 기반 label을 생성합니다. 이 기능은 모델 학습용 데이터셋 생성기이며, 실제 모델 학습/예측, 주문 실행, 백테스트 수익률 계산은 수행하지 않습니다.
+
+```python
+from trading_agent.config import load_config
+from trading_agent.storage import QuoteSnapshotStore
+from trading_agent.datasets import TrainingDatasetBuilder, TrainingDatasetConfig
+
+config = load_config()
+store = QuoteSnapshotStore(config.database_url)
+
+builder = TrainingDatasetBuilder(
+    store=store,
+    config=TrainingDatasetConfig(
+        lookback_minutes=5.0,
+        prediction_horizon_minutes=10.0,
+        target_return_pct=1.0,
+        min_snapshot_count=2,
+        max_snapshots_per_window=1000,
+        max_snapshots_per_stock=10000,
+        max_future_lag_seconds=60.0,
+    ),
+)
+
+examples = builder.build(["005930", "000660", "035420"])
+records = builder.to_records(examples)
+
+builder.write_csv(examples, "training_dataset.csv")
+
+print(len(examples))
+print(records[0] if records else None)
+```
+
+### Historical Training Dataset Builder 주의사항
+
+- 이 기능은 모델 학습용 데이터셋 생성기입니다.
+- 실제 모델 학습은 아직 하지 않습니다.
+- 실제 모델 예측도 아직 하지 않습니다.
+- 실제 주문 실행도 하지 않습니다.
+- `future_return_pct`와 `label`은 학습 타깃이며, feature로 사용하면 정보 누수가 발생합니다.
+- 실제 모델 학습 시에는 시간 기준 train/validation split이 필요합니다.
+- 랜덤 셔플 기반 검증은 미래 정보 누수 위험이 있습니다.
+- 수수료, 슬리피지, 체결 실패는 아직 반영하지 않습니다.
