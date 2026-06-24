@@ -133,3 +133,75 @@ def test_empty_database_url_raises_safe_error(database_url):
 
     assert "database URL is required" in str(exc_info.value)
     assert "postgresql://" not in str(exc_info.value)
+
+
+def test_get_recent_snapshots_returns_observed_at_ascending(store):
+    t1 = datetime(2026, 6, 24, 9, 0, tzinfo=timezone.utc)
+    t2 = t1 + timedelta(minutes=1)
+    t3 = t1 + timedelta(minutes=2)
+    store.save_quote(make_quote(current_price=101), observed_at=t2)
+    store.save_quote(make_quote(current_price=100), observed_at=t1)
+    store.save_quote(make_quote(current_price=102), observed_at=t3)
+
+    recent = store.get_recent_snapshots("005930")
+
+    assert [snapshot.current_price for snapshot in recent] == [100, 101, 102]
+    assert [snapshot.observed_at for snapshot in recent] == [t1, t2, t3]
+
+
+def test_get_recent_snapshots_filters_since(store):
+    t1 = datetime(2026, 6, 24, 9, 0, tzinfo=timezone.utc)
+    t2 = t1 + timedelta(minutes=1)
+    t3 = t1 + timedelta(minutes=2)
+    store.save_quote(make_quote(current_price=100), observed_at=t1)
+    store.save_quote(make_quote(current_price=101), observed_at=t2)
+    store.save_quote(make_quote(current_price=102), observed_at=t3)
+
+    recent = store.get_recent_snapshots("005930", since=t2)
+
+    assert [snapshot.current_price for snapshot in recent] == [101, 102]
+
+
+def test_get_recent_snapshots_applies_limit(store):
+    base = datetime(2026, 6, 24, 9, 0, tzinfo=timezone.utc)
+    for idx in range(3):
+        store.save_quote(make_quote(current_price=100 + idx), observed_at=base + timedelta(minutes=idx))
+
+    recent = store.get_recent_snapshots("005930", limit=2)
+
+    assert [snapshot.current_price for snapshot in recent] == [101, 102]
+
+
+def test_get_recent_snapshots_limit_must_be_positive(store):
+    with pytest.raises(ValueError):
+        store.get_recent_snapshots("005930", limit=0)
+
+
+def test_get_recent_snapshots_returns_empty_for_unknown_stock(store):
+    assert store.get_recent_snapshots("999999") == []
+
+
+def test_get_latest_quotes_returns_latest_snapshots_by_stock_code(store):
+    base = datetime(2026, 6, 24, 9, 0, tzinfo=timezone.utc)
+    store.save_quote(make_quote("005930", "삼성전자", 70000), observed_at=base)
+    store.save_quote(make_quote("005930", "삼성전자", 71000), observed_at=base + timedelta(minutes=1))
+    store.save_quote(make_quote("000660", "SK하이닉스", 200000), observed_at=base)
+    store.save_quote(make_quote("000660", "SK하이닉스", 201000), observed_at=base + timedelta(minutes=1))
+
+    latest = store.get_latest_quotes(["005930", "000660"])
+
+    assert set(latest) == {"005930", "000660"}
+    assert latest["005930"].current_price == 71000
+    assert latest["000660"].current_price == 201000
+
+
+def test_get_latest_quotes_excludes_stocks_without_history(store):
+    store.save_quote(make_quote("005930", "삼성전자", 70000))
+
+    latest = store.get_latest_quotes(["005930", "999999"])
+
+    assert set(latest) == {"005930"}
+
+
+def test_get_latest_quotes_empty_input_returns_empty_dict(store):
+    assert store.get_latest_quotes([]) == {}
