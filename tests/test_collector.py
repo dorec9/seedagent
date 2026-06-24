@@ -1,5 +1,5 @@
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock, call
 
@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "trading_agent"))
 
-from collector import QuoteCollectionResult, QuotePollingCollector, QuotePollingConfig
+from collector import KST, QuoteCollectionResult, QuotePollingCollector, QuotePollingConfig
 from market_data import KiwoomAPIError, StockQuote
 from storage import StorageError
 
@@ -83,7 +83,7 @@ def test_collect_once_fetches_and_saves_quotes():
     assert result.saved_count == 2
     assert result.snapshot_ids == [11, 12]
     assert result.observed_at.tzinfo is not None
-    assert result.observed_at.utcoffset() == timezone.utc.utcoffset(result.observed_at)
+    assert result.observed_at.utcoffset() == timedelta(hours=9)
 
 
 def test_run_uses_max_iterations_and_sleeps_between_iterations_only(monkeypatch):
@@ -94,7 +94,7 @@ def test_run_uses_max_iterations_and_sleeps_between_iterations_only(monkeypatch)
         requested_count=1,
         saved_count=1,
         snapshot_ids=[iteration],
-        observed_at=datetime.now(timezone.utc),
+        observed_at=datetime.now(KST),
     ))
     collector.collect_once = collect_once
     sleep = Mock()

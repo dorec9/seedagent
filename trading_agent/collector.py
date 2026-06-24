@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+KST = ZoneInfo("Asia/Seoul")
 
 try:
     from .market_data import KiwoomAPIError, KiwoomMarketData
@@ -63,7 +66,7 @@ class QuotePollingCollector:
 
     def collect_once(self, access_token: str, iteration: int = 1) -> QuoteCollectionResult:
         """Fetch and store one batch of quotes."""
-        observed_at = datetime.now(timezone.utc)
+        observed_at = datetime.now(KST)
         quotes = self.market_data.get_stock_quotes(
             self.config.stock_codes,
             access_token,
