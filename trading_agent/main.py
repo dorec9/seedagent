@@ -12,7 +12,7 @@ def main() -> None:
     config = load_config()
     auth = KiwoomAuth(config)
     result = auth.issue_access_token()
-    print(json.dumps(result, ensure_ascii=False, indent=4))
+    print(json.dumps(result.to_public_dict(), ensure_ascii=False, indent=4))
 
 
 if __name__ == "__main__":
