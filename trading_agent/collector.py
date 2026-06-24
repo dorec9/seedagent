@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+KST = ZoneInfo("Asia/Seoul")
 
 try:
     from .market_data import KiwoomAPIError, KiwoomMarketData
@@ -18,13 +21,14 @@ except ImportError:  # pragma: no cover - supports direct script-style imports
 class QuotePollingConfig:
     """Configuration for repeatedly collecting quote snapshots."""
 
-    stock_codes: list[str]
+    stock_codes: tuple[str, ...]
     interval_seconds: float = 5.0
     per_request_delay_seconds: float = 0.0
     max_iterations: int | None = None
     fail_fast: bool = True
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "stock_codes", tuple(self.stock_codes))
         if not self.stock_codes:
             raise ValueError("stock_codes must not be empty")
         if self.interval_seconds <= 0:
@@ -44,6 +48,7 @@ class QuoteCollectionResult:
     saved_count: int
     snapshot_ids: list[int]
     observed_at: datetime
+    error: Exception | None = None
 
 
 class QuotePollingCollector:
@@ -61,7 +66,7 @@ class QuotePollingCollector:
 
     def collect_once(self, access_token: str, iteration: int = 1) -> QuoteCollectionResult:
         """Fetch and store one batch of quotes."""
-        observed_at = datetime.now(timezone.utc)
+        observed_at = datetime.now(KST)
         quotes = self.market_data.get_stock_quotes(
             self.config.stock_codes,
             access_token,
@@ -77,16 +82,34 @@ class QuotePollingCollector:
         )
 
     def run(self, access_token: str) -> list[QuoteCollectionResult]:
-        """Run the polling loop until max_iterations is reached, or forever when unset."""
+        """Run the polling loop until max_iterations is reached, or forever when unset.
+
+        Results are only accumulated when ``max_iterations`` is set. In indefinite
+        mode (``max_iterations=None``) results are discarded after each iteration to
+        avoid unbounded memory growth.
+        """
         results: list[QuoteCollectionResult] = []
         iteration = 1
 
         while self.config.max_iterations is None or iteration <= self.config.max_iterations:
             try:
-                results.append(self.collect_once(access_token, iteration=iteration))
-            except (KiwoomAPIError, StorageError):
+                result = self.collect_once(access_token, iteration=iteration)
+                if self.config.max_iterations is not None:
+                    results.append(result)
+            except (KiwoomAPIError, StorageError) as exc:
                 if self.config.fail_fast:
                     raise
+                if self.config.max_iterations is not None:
+                    results.append(
+                        QuoteCollectionResult(
+                            iteration=iteration,
+                            requested_count=len(self.config.stock_codes),
+                            saved_count=0,
+                            snapshot_ids=[],
+                            observed_at=datetime.now(timezone.utc),
+                            error=exc,
+                        )
+                    )
 
             should_continue = self.config.max_iterations is None or iteration < self.config.max_iterations
             if should_continue:

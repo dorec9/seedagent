@@ -1,9 +1,13 @@
-from datetime import datetime, timezone
+import sys
+from datetime import datetime, timedelta
+from pathlib import Path
 from unittest.mock import Mock, call
 
 import pytest
 
-from collector import QuoteCollectionResult, QuotePollingCollector, QuotePollingConfig
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "trading_agent"))
+
+from collector import KST, QuoteCollectionResult, QuotePollingCollector, QuotePollingConfig
 from market_data import KiwoomAPIError, StockQuote
 from storage import StorageError
 
@@ -54,7 +58,7 @@ def test_quote_polling_config_validates_invalid_values(kwargs):
 def test_quote_polling_config_preserves_order_and_duplicates():
     config = QuotePollingConfig(stock_codes=["005930", "000660", "005930"])
 
-    assert config.stock_codes == ["005930", "000660", "005930"]
+    assert config.stock_codes == ("005930", "000660", "005930")
 
 
 def test_collect_once_fetches_and_saves_quotes():
@@ -68,7 +72,7 @@ def test_collect_once_fetches_and_saves_quotes():
     result = collector.collect_once(TOKEN, iteration=7)
 
     market_data.get_stock_quotes.assert_called_once_with(
-        ["005930", "000660"],
+        ("005930", "000660"),
         TOKEN,
         delay_seconds=0.2,
     )
@@ -79,7 +83,7 @@ def test_collect_once_fetches_and_saves_quotes():
     assert result.saved_count == 2
     assert result.snapshot_ids == [11, 12]
     assert result.observed_at.tzinfo is not None
-    assert result.observed_at.utcoffset() == timezone.utc.utcoffset(result.observed_at)
+    assert result.observed_at.utcoffset() == timedelta(hours=9)
 
 
 def test_run_uses_max_iterations_and_sleeps_between_iterations_only(monkeypatch):
@@ -90,7 +94,7 @@ def test_run_uses_max_iterations_and_sleeps_between_iterations_only(monkeypatch)
         requested_count=1,
         saved_count=1,
         snapshot_ids=[iteration],
-        observed_at=datetime.now(timezone.utc),
+        observed_at=datetime.now(KST),
     ))
     collector.collect_once = collect_once
     sleep = Mock()
@@ -121,3 +125,33 @@ def test_run_propagates_storage_error_when_fail_fast_true():
         collector.run(TOKEN)
 
     assert TOKEN not in str(exc_info.value)
+
+
+def test_run_records_failure_result_when_fail_fast_false_kiwoom_error(monkeypatch):
+    config = QuotePollingConfig(stock_codes=["005930"], max_iterations=2, fail_fast=False)
+    collector, market_data, _ = make_collector(config=config)
+    err = KiwoomAPIError("quote lookup failed")
+    market_data.get_stock_quotes.side_effect = err
+    monkeypatch.setattr("collector.time.sleep", Mock())
+
+    results = collector.run(TOKEN)
+
+    assert len(results) == 2
+    for result in results:
+        assert result.saved_count == 0
+        assert result.snapshot_ids == []
+        assert result.error is err
+
+
+def test_run_records_failure_result_when_fail_fast_false_storage_error():
+    config = QuotePollingConfig(stock_codes=["005930"], max_iterations=1, fail_fast=False)
+    collector, _, store = make_collector(config=config)
+    err = StorageError("failed to save")
+    store.save_quotes.side_effect = err
+
+    results = collector.run(TOKEN)
+
+    assert len(results) == 1
+    assert results[0].saved_count == 0
+    assert results[0].snapshot_ids == []
+    assert results[0].error is err
