@@ -142,7 +142,7 @@ class QuoteSnapshotStore:
                     row = cur.fetchone()
         except Exception as exc:
             if _is_database_error(exc):
-                raise StorageError("Failed to read quote snapshot") from exc
+                raise StorageError("Failed to read quote snapshot") from None
             raise
 
         if row is None:
