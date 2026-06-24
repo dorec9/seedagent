@@ -20,7 +20,7 @@ from signals import CandidateFeatures
 BASE = datetime(2026, 6, 24, 9, 0, tzinfo=timezone.utc)
 
 
-def records(count=12, one_validation_class=False, include_future=True):
+def records(count=12, one_validation_class=False, include_future=True, future_horizon_minutes=0):
     rows = []
     labels = [0, 1] * ((count + 1) // 2)
     for i in range(count):
@@ -42,7 +42,7 @@ def records(count=12, one_validation_class=False, include_future=True):
             "latest_age_seconds": 0.0,
         }
         if include_future:
-            row.update({"future_return_pct": 9_999, "future_price": 999999, "future_at": (BASE + timedelta(minutes=i + 10)).isoformat()})
+            row.update({"future_return_pct": 9_999, "future_price": 999999, "future_at": (BASE + timedelta(minutes=i + future_horizon_minutes)).isoformat()})
         rows.append(row)
     return rows
 
@@ -104,6 +104,12 @@ def test_split_is_time_based_and_validation_is_latest(monkeypatch):
     assert result.validation_size == 2
     assert seen["calls"][0] == [(BASE + timedelta(minutes=i)).isoformat() for i in range(6)]
     assert seen["calls"][1] == [(BASE + timedelta(minutes=i)).isoformat() for i in range(6, 8)]
+
+
+def test_training_labels_crossing_validation_start_are_purged():
+    result = trainer(model_type="random_forest").train_records(records(12, future_horizon_minutes=2))
+    assert result.validation_size == 3
+    assert result.train_size == 8
 
 
 def test_train_label_single_class_raises():

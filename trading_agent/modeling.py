@@ -200,6 +200,11 @@ class BaselineModelTrainer:
             raise ModelTrainingError("Not enough training records after time-based validation split")
         train_records = sorted_records[:train_size]
         validation_records = sorted_records[train_size:]
+        validation_start = self._parse_time(validation_records[0].get(self.config.time_column))
+        train_records = self._purge_training_records_crossing_validation_start(train_records, validation_start)
+        if len(train_records) < self.config.min_train_examples:
+            raise ModelTrainingError("Not enough training records after purging labels that overlap validation")
+        train_size = len(train_records)
         x_train, y_train = self._build_matrix(train_records)
         x_validation, y_validation = self._build_matrix(validation_records)
         if set(y_train) != {0, 1}:
@@ -287,6 +292,19 @@ class BaselineModelTrainer:
             return joblib.load(Path(path))
         except Exception as exc:  # noqa: BLE001
             raise ModelTrainingError("Failed to load model bundle") from exc
+
+    def _purge_training_records_crossing_validation_start(
+        self, records: list[dict[str, object]], validation_start: datetime
+    ) -> list[dict[str, object]]:
+        purged_records: list[dict[str, object]] = []
+        for record in records:
+            future_at = record.get("future_at")
+            if future_at in (None, ""):
+                purged_records.append(record)
+                continue
+            if self._parse_time(future_at) <= validation_start:
+                purged_records.append(record)
+        return purged_records
 
     def _build_matrix(self, records: list[dict[str, object]]) -> tuple[list[list[float]], list[int]]:
         x_values: list[list[float]] = []
