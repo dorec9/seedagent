@@ -125,3 +125,33 @@ def test_run_propagates_storage_error_when_fail_fast_true():
         collector.run(TOKEN)
 
     assert TOKEN not in str(exc_info.value)
+
+
+def test_run_records_failure_result_when_fail_fast_false_kiwoom_error(monkeypatch):
+    config = QuotePollingConfig(stock_codes=["005930"], max_iterations=2, fail_fast=False)
+    collector, market_data, _ = make_collector(config=config)
+    err = KiwoomAPIError("quote lookup failed")
+    market_data.get_stock_quotes.side_effect = err
+    monkeypatch.setattr("collector.time.sleep", Mock())
+
+    results = collector.run(TOKEN)
+
+    assert len(results) == 2
+    for result in results:
+        assert result.saved_count == 0
+        assert result.snapshot_ids == []
+        assert result.error is err
+
+
+def test_run_records_failure_result_when_fail_fast_false_storage_error():
+    config = QuotePollingConfig(stock_codes=["005930"], max_iterations=1, fail_fast=False)
+    collector, _, store = make_collector(config=config)
+    err = StorageError("failed to save")
+    store.save_quotes.side_effect = err
+
+    results = collector.run(TOKEN)
+
+    assert len(results) == 1
+    assert results[0].saved_count == 0
+    assert results[0].snapshot_ids == []
+    assert results[0].error is err

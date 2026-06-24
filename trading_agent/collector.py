@@ -45,6 +45,7 @@ class QuoteCollectionResult:
     saved_count: int
     snapshot_ids: list[int]
     observed_at: datetime
+    error: Exception | None = None
 
 
 class QuotePollingCollector:
@@ -92,9 +93,20 @@ class QuotePollingCollector:
                 result = self.collect_once(access_token, iteration=iteration)
                 if self.config.max_iterations is not None:
                     results.append(result)
-            except (KiwoomAPIError, StorageError):
+            except (KiwoomAPIError, StorageError) as exc:
                 if self.config.fail_fast:
                     raise
+                if self.config.max_iterations is not None:
+                    results.append(
+                        QuoteCollectionResult(
+                            iteration=iteration,
+                            requested_count=len(self.config.stock_codes),
+                            saved_count=0,
+                            snapshot_ids=[],
+                            observed_at=datetime.now(timezone.utc),
+                            error=exc,
+                        )
+                    )
 
             should_continue = self.config.max_iterations is None or iteration < self.config.max_iterations
             if should_continue:
