@@ -78,13 +78,20 @@ class QuotePollingCollector:
         )
 
     def run(self, access_token: str) -> list[QuoteCollectionResult]:
-        """Run the polling loop until max_iterations is reached, or forever when unset."""
+        """Run the polling loop until max_iterations is reached, or forever when unset.
+
+        Results are only accumulated when ``max_iterations`` is set. In indefinite
+        mode (``max_iterations=None``) results are discarded after each iteration to
+        avoid unbounded memory growth.
+        """
         results: list[QuoteCollectionResult] = []
         iteration = 1
 
         while self.config.max_iterations is None or iteration <= self.config.max_iterations:
             try:
-                results.append(self.collect_once(access_token, iteration=iteration))
+                result = self.collect_once(access_token, iteration=iteration)
+                if self.config.max_iterations is not None:
+                    results.append(result)
             except (KiwoomAPIError, StorageError):
                 if self.config.fail_fast:
                     raise
