@@ -43,11 +43,6 @@ def store():
             cur.execute("TRUNCATE TABLE price_snapshots RESTART IDENTITY")
 
 
-def test_storage_integration_tests_skip_without_test_database_url(monkeypatch):
-    monkeypatch.delenv("TEST_DATABASE_URL", raising=False)
-    if not os.getenv("TEST_DATABASE_URL"):
-        pytest.skip("TEST_DATABASE_URL is not set; skipping PostgreSQL integration tests")
-
 
 def test_initialize_creates_price_snapshots_table(store):
     with store._connect() as conn:
