@@ -184,6 +184,89 @@ class QuoteSnapshotStore:
             return None
         return _row_to_snapshot(row)
 
+
+    def get_recent_snapshots(
+        self,
+        stock_code: str,
+        since: datetime | None = None,
+        limit: int = 100,
+    ) -> list[QuoteSnapshot]:
+        """Return recent snapshots for one stock ordered oldest to newest."""
+        if limit <= 0:
+            raise ValueError("limit must be greater than 0")
+        since_utc = _ensure_aware_utc(since) if since is not None else None
+        try:
+            with self._connect() as conn:
+                with conn.cursor(row_factory=dict_row) as cur:
+                    if since_utc is None:
+                        cur.execute(
+                            """
+                            SELECT id, stock_code, stock_name, current_price, change_price,
+                                   change_rate, volume, observed_at, raw
+                            FROM (
+                                SELECT id, stock_code, stock_name, current_price, change_price,
+                                       change_rate, volume, observed_at, raw
+                                FROM price_snapshots
+                                WHERE stock_code = %s
+                                ORDER BY observed_at DESC, id DESC
+                                LIMIT %s
+                            ) recent
+                            ORDER BY observed_at ASC, id ASC
+                            """,
+                            (stock_code, limit),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            SELECT id, stock_code, stock_name, current_price, change_price,
+                                   change_rate, volume, observed_at, raw
+                            FROM (
+                                SELECT id, stock_code, stock_name, current_price, change_price,
+                                       change_rate, volume, observed_at, raw
+                                FROM price_snapshots
+                                WHERE stock_code = %s AND observed_at >= %s
+                                ORDER BY observed_at DESC, id DESC
+                                LIMIT %s
+                            ) recent
+                            ORDER BY observed_at ASC, id ASC
+                            """,
+                            (stock_code, since_utc, limit),
+                        )
+                    rows = cur.fetchall()
+        except Exception as exc:
+            if _is_database_error(exc):
+                raise StorageError("Failed to read quote snapshots") from None
+            raise
+
+        return [_row_to_snapshot(row) for row in rows]
+
+    def get_latest_quotes(self, stock_codes: list[str]) -> dict[str, QuoteSnapshot]:
+        """Return latest snapshots for multiple stock codes keyed by stock code."""
+        unique_codes = list(dict.fromkeys(stock_codes))
+        if not unique_codes:
+            return {}
+        try:
+            with self._connect() as conn:
+                with conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute(
+                        """
+                        SELECT DISTINCT ON (stock_code)
+                               id, stock_code, stock_name, current_price, change_price,
+                               change_rate, volume, observed_at, raw
+                        FROM price_snapshots
+                        WHERE stock_code = ANY(%s)
+                        ORDER BY stock_code, observed_at DESC, id DESC
+                        """,
+                        (unique_codes,),
+                    )
+                    rows = cur.fetchall()
+        except Exception as exc:
+            if _is_database_error(exc):
+                raise StorageError("Failed to read quote snapshots") from None
+            raise
+
+        return {row["stock_code"]: _row_to_snapshot(row) for row in rows}
+
     def _connect(self):
         if psycopg is None:
             raise StorageError("psycopg is required for PostgreSQL quote snapshot storage")
