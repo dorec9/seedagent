@@ -362,3 +362,77 @@ print(records[0] if records else None)
 - 실제 모델 학습 시에는 시간 기준 train/validation split이 필요합니다.
 - 랜덤 셔플 기반 검증은 미래 정보 누수 위험이 있습니다.
 - 수수료, 슬리피지, 체결 실패는 아직 반영하지 않습니다.
+
+## Baseline ML Model Trainer 사용 예시
+
+`BaselineModelTrainer`는 `TrainingDatasetBuilder`가 만든 `TrainingExample` 또는 CSV 레코드를 입력으로 받아 baseline classification model을 학습합니다. 검증은 random split이나 shuffle을 사용하지 않고, `evaluated_at` 기준으로 정렬한 뒤 가장 최신 구간을 validation set으로 사용하는 time-based validation입니다. 학습된 모델과 metrics, feature schema, config는 joblib model bundle로 저장할 수 있습니다.
+
+```python
+from trading_agent.datasets import TrainingDatasetBuilder, TrainingDatasetConfig
+from trading_agent.modeling import BaselineModelTrainer, ModelTrainingConfig
+from trading_agent.storage import QuoteSnapshotStore
+from trading_agent.config import load_config
+
+config = load_config()
+store = QuoteSnapshotStore(config.database_url)
+
+dataset_builder = TrainingDatasetBuilder(
+    store=store,
+    config=TrainingDatasetConfig(
+        lookback_minutes=5.0,
+        prediction_horizon_minutes=10.0,
+        target_return_pct=1.0,
+    ),
+)
+
+examples = dataset_builder.build(["005930", "000660", "035420"])
+
+trainer = BaselineModelTrainer(
+    ModelTrainingConfig(
+        model_type="gradient_boosting",
+        validation_ratio=0.2,
+        random_state=42,
+    )
+)
+
+result = trainer.train_examples(
+    examples,
+    model_output_path="artifacts/baseline_model.joblib",
+)
+
+print(result.metrics)
+print(result.train_size, result.validation_size)
+print(result.model_path)
+```
+
+### CSV 기반 Baseline ML Model Trainer 예시
+
+`TrainingDatasetBuilder.write_csv(...)`로 저장한 CSV는 pandas 없이 stdlib `csv.DictReader`로 읽고 학습할 수 있습니다.
+
+```python
+from trading_agent.modeling import BaselineModelTrainer, ModelTrainingConfig
+
+trainer = BaselineModelTrainer(
+    ModelTrainingConfig(model_type="gradient_boosting")
+)
+
+result = trainer.train_csv(
+    "training_dataset.csv",
+    model_output_path="artifacts/baseline_model.joblib",
+)
+
+print(result.metrics)
+```
+
+### Baseline ML Model Trainer 주의사항
+
+- 이 기능은 baseline model trainer입니다.
+- 아직 실시간 예측을 자동투자 판단에 연결하지 않습니다.
+- 아직 `CandidateSignal.model_score`를 채우지 않습니다.
+- 아직 실제 주문을 실행하지 않습니다.
+- random split을 사용하지 않고 time-based validation을 사용합니다.
+- `future_return_pct`, `future_price`, `future_at`, `label`은 feature로 사용하면 안 됩니다.
+- validation 성능이 좋다고 실제 매매 수익이 보장되지 않습니다.
+- 수수료, 슬리피지, 체결 실패, 호가 공백은 아직 반영하지 않았습니다.
+- label 불균형이 심하면 accuracy만 보고 판단하면 안 됩니다.
+- precision, recall, roc_auc를 함께 봐야 합니다.
