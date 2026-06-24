@@ -291,3 +291,73 @@ def test_get_snapshots_between_converts_timezone_aware_datetime_to_utc(store):
 
     assert len(snapshots) == 1
     assert snapshots[0].observed_at == aware
+
+from ohlcv import OhlcvBar
+
+
+def make_bar(day=1, close=1000, stock_name="삼성전자", raw=None):
+    return OhlcvBar(
+        stock_code="005930",
+        stock_name=stock_name,
+        interval="1d",
+        bar_time=datetime(2026, 1, day, tzinfo=timezone.utc),
+        open_price=close - 10,
+        high_price=close + 10,
+        low_price=close - 20,
+        close_price=close,
+        volume=123,
+        trading_value=456,
+        raw=raw or {"day": day, "시장": "코스피"},
+    )
+
+
+@pytest.fixture
+def ohlcv_store(store):
+    store.initialize_ohlcv()
+    with store._connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE TABLE ohlcv_bars RESTART IDENTITY")
+    return store
+
+
+def test_initialize_ohlcv_creates_table_and_index(ohlcv_store):
+    with ohlcv_store._connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('public.ohlcv_bars')")
+            assert cur.fetchone()[0] == "ohlcv_bars"
+            cur.execute("SELECT to_regclass('public.idx_ohlcv_bars_stock_interval_bar_time')")
+            assert cur.fetchone()[0] == "idx_ohlcv_bars_stock_interval_bar_time"
+
+
+def test_save_ohlcv_bar_inserts_and_duplicate_save_upserts(ohlcv_store):
+    first = ohlcv_store.save_ohlcv_bar(make_bar(close=1000))
+    second = ohlcv_store.save_ohlcv_bar(make_bar(close=2000, raw={"updated": True}))
+    bars = ohlcv_store.get_ohlcv_bars("005930")
+    assert first == second
+    assert len(bars) == 1
+    assert bars[0].close_price == 2000
+    assert bars[0].raw == {"updated": True}
+
+
+def test_save_ohlcv_bars_returns_ordered_ids_and_get_returns_ascending(ohlcv_store):
+    ids = ohlcv_store.save_ohlcv_bars([make_bar(3, 3000), make_bar(1, 1000), make_bar(2, 2000)])
+    bars = ohlcv_store.get_ohlcv_bars("005930")
+    assert len(ids) == 3
+    assert [b.close_price for b in bars] == [1000, 2000, 3000]
+
+
+def test_get_ohlcv_bars_start_end_filter_and_limit_validation(ohlcv_store):
+    ohlcv_store.save_ohlcv_bars([make_bar(1, 1000), make_bar(2, 2000), make_bar(3, 3000)])
+    bars = ohlcv_store.get_ohlcv_bars("005930", start=datetime(2026, 1, 2), end=datetime(2026, 1, 3, tzinfo=timezone.utc))
+    assert [b.close_price for b in bars] == [2000, 3000]
+    with pytest.raises(ValueError):
+        ohlcv_store.get_ohlcv_bars("005930", limit=0)
+
+
+def test_ohlcv_korean_stock_name_and_raw_jsonb_roundtrip(ohlcv_store):
+    raw = {"stk_nm": "삼성전자", "nested": {"시장": "코스피"}}
+    ohlcv_store.save_ohlcv_bar(make_bar(stock_name="삼성전자", raw=raw))
+    saved = ohlcv_store.get_ohlcv_bars("005930")[0]
+    assert saved.stock_name == "삼성전자"
+    assert saved.raw == raw
+    assert isinstance(saved.raw, dict)

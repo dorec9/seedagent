@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Sequence
 
 try:
     import psycopg
@@ -18,8 +18,10 @@ except ImportError:  # pragma: no cover - exercised when optional dependency is 
 
 try:
     from .market_data import StockQuote
+    from .ohlcv import OhlcvBar, ensure_aware_utc
 except ImportError:  # pragma: no cover - supports direct script-style imports
     from market_data import StockQuote
+    from ohlcv import OhlcvBar, ensure_aware_utc
 
 
 class StorageError(Exception):
@@ -80,6 +82,134 @@ class QuoteSnapshotStore:
             if _is_database_error(exc):
                 raise StorageError("Failed to initialize quote snapshot storage") from exc
             raise
+
+    def initialize_ohlcv(self) -> None:
+        """Create the OHLCV bar table and lookup indexes if needed."""
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS ohlcv_bars (
+                            id BIGSERIAL PRIMARY KEY,
+                            stock_code TEXT NOT NULL,
+                            stock_name TEXT,
+                            interval TEXT NOT NULL,
+                            bar_time TIMESTAMPTZ NOT NULL,
+                            open_price BIGINT NOT NULL,
+                            high_price BIGINT NOT NULL,
+                            low_price BIGINT NOT NULL,
+                            close_price BIGINT NOT NULL,
+                            volume BIGINT,
+                            trading_value BIGINT,
+                            raw JSONB NOT NULL,
+                            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                            UNIQUE (stock_code, interval, bar_time)
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE INDEX IF NOT EXISTS idx_ohlcv_bars_stock_interval_bar_time
+                        ON ohlcv_bars (stock_code, interval, bar_time DESC)
+                        """
+                    )
+        except Exception as exc:
+            if _is_database_error(exc):
+                raise StorageError("Failed to initialize OHLCV storage") from exc
+            raise
+
+    def save_ohlcv_bar(self, bar: OhlcvBar) -> int:
+        """Persist one OHLCV bar with upsert semantics and return its row id."""
+        return self.save_ohlcv_bars([bar])[0]
+
+    def save_ohlcv_bars(self, bars: Sequence[OhlcvBar]) -> list[int]:
+        """Persist OHLCV bars and return their row ids."""
+        ids: list[int] = []
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    for bar in bars:
+                        cur.execute(
+                            """
+                            INSERT INTO ohlcv_bars (
+                                stock_code, stock_name, interval, bar_time, open_price,
+                                high_price, low_price, close_price, volume, trading_value, raw
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (stock_code, interval, bar_time) DO UPDATE SET
+                                stock_name = EXCLUDED.stock_name,
+                                open_price = EXCLUDED.open_price,
+                                high_price = EXCLUDED.high_price,
+                                low_price = EXCLUDED.low_price,
+                                close_price = EXCLUDED.close_price,
+                                volume = EXCLUDED.volume,
+                                trading_value = EXCLUDED.trading_value,
+                                raw = EXCLUDED.raw
+                            RETURNING id
+                            """,
+                            (
+                                bar.stock_code,
+                                bar.stock_name,
+                                bar.interval,
+                                ensure_aware_utc(bar.bar_time),
+                                bar.open_price,
+                                bar.high_price,
+                                bar.low_price,
+                                bar.close_price,
+                                bar.volume,
+                                bar.trading_value,
+                                Jsonb(bar.raw),
+                            ),
+                        )
+                        row = cur.fetchone()
+                        if row is None:
+                            raise StorageError("Failed to save OHLCV bar")
+                        ids.append(int(row[0]))
+                    return ids
+        except StorageError:
+            raise
+        except Exception as exc:
+            if _is_database_error(exc):
+                raise StorageError("Failed to save OHLCV bar") from None
+            raise
+
+    def get_ohlcv_bars(
+        self,
+        stock_code: str,
+        interval: str = "1d",
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int = 10000,
+    ) -> list[OhlcvBar]:
+        """Return OHLCV bars ordered oldest to newest."""
+        if limit <= 0:
+            raise ValueError("limit must be greater than 0")
+        start_utc = _ensure_aware_utc(start) if start is not None else None
+        end_utc = _ensure_aware_utc(end) if end is not None else None
+        try:
+            with self._connect() as conn:
+                with conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute(
+                        """
+                        SELECT stock_code, stock_name, interval, bar_time, open_price,
+                               high_price, low_price, close_price, volume, trading_value, raw
+                        FROM ohlcv_bars
+                        WHERE stock_code = %s
+                          AND interval = %s
+                          AND (%s::timestamptz IS NULL OR bar_time >= %s)
+                          AND (%s::timestamptz IS NULL OR bar_time <= %s)
+                        ORDER BY bar_time ASC, id ASC
+                        LIMIT %s
+                        """,
+                        (stock_code, interval, start_utc, start_utc, end_utc, end_utc, limit),
+                    )
+                    rows = cur.fetchall()
+        except Exception as exc:
+            if _is_database_error(exc):
+                raise StorageError("Failed to read OHLCV bars") from None
+            raise
+        return [_row_to_ohlcv_bar(row) for row in rows]
 
     def save_quote(self, quote: StockQuote, observed_at: datetime | None = None) -> int:
         """Persist one quote snapshot and return its generated row id."""
@@ -332,6 +462,25 @@ def _row_to_snapshot(row: dict[str, Any]) -> QuoteSnapshot:
         change_rate=row["change_rate"],
         volume=row["volume"],
         observed_at=_ensure_aware_utc(row["observed_at"]),
+        raw=raw,
+    )
+
+
+def _row_to_ohlcv_bar(row: dict[str, Any]) -> OhlcvBar:
+    raw = row["raw"]
+    if isinstance(raw, str):
+        raw = json.loads(raw)
+    return OhlcvBar(
+        stock_code=row["stock_code"],
+        stock_name=row["stock_name"],
+        interval=row["interval"],
+        bar_time=_ensure_aware_utc(row["bar_time"]),
+        open_price=row["open_price"],
+        high_price=row["high_price"],
+        low_price=row["low_price"],
+        close_price=row["close_price"],
+        volume=row["volume"],
+        trading_value=row["trading_value"],
         raw=raw,
     )
 
