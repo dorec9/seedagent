@@ -226,7 +226,10 @@ from trading_agent.collector import QuotePollingCollector, QuotePollingConfig
 config = load_config()
 
 auth = KiwoomAuth(config)
-token_result = auth.issue_access_token()
+auth.issue_access_token()
+
+# KiwoomAuth.issue_access_token() currently returns only metadata and does not expose the token.
+access_token = "<YOUR_KIWOOM_ACCESS_TOKEN>"
 
 market_data = KiwoomMarketData(config)
 
