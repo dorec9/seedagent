@@ -106,3 +106,25 @@ print(quote.current_price)
 ```
 
 반환되는 `StockQuote`에는 최소한 `stock_code`, `stock_name`, `current_price`, `change_price`, `change_rate`, `volume`, `raw` 필드가 포함됩니다. HTTP 오류, 타임아웃, JSON 파싱 오류, 또는 `return_code`가 `0`이 아닌 키움 API 실패 응답은 `KiwoomAPIError`로 처리됩니다.
+
+### 복수 종목 현재가 조회 예시
+
+`get_stock_quotes`는 단일 종목 조회와 동일한 `StockQuote` 목록을 입력한 종목코드 순서대로 반환합니다. 중복 종목코드도 입력 순서대로 각각 조회하며, 기본 정책은 fail-fast이므로 개별 종목 조회 중 `KiwoomAPIError`가 발생하면 즉시 예외를 발생시키고 남은 종목은 조회하지 않습니다. 과도한 API 호출을 피해야 하는 경우 `delay_seconds`를 양수로 지정해 각 요청 사이에 대기 시간을 둘 수 있습니다.
+
+```python
+from config import load_config
+from auth import KiwoomAuth
+from market_data import KiwoomMarketData
+
+config = load_config()
+auth = KiwoomAuth(config)
+auth.issue_access_token()
+
+# KiwoomAuth.issue_access_token() currently returns only metadata and does not expose the token.
+access_token = "<YOUR_KIWOOM_ACCESS_TOKEN>"
+
+market_data = KiwoomMarketData(config)
+quotes = market_data.get_stock_quotes(["005930", "000660", "035420"], access_token)
+for quote in quotes:
+    print(quote.stock_code, quote.stock_name, quote.current_price)
+```

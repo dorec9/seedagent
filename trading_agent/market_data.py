@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from typing import Any
 from urllib import error, request
@@ -129,6 +130,27 @@ class KiwoomMarketData:
             volume=abs(_parse_int(_first_present(payload, "trde_qty", "volume"))),
             raw=payload,
         )
+
+    def get_stock_quotes(
+        self, stk_cds: list[str], access_token: str, delay_seconds: float = 0.0
+    ) -> list[StockQuote]:
+        """Return quotes for multiple stock codes in the same order as requested.
+
+        The method intentionally reuses ``get_stock_quote`` for each stock code
+        so single-quote normalization and error handling stay consistent. The
+        failure policy is fail-fast: the first ``KiwoomAPIError`` raised by an
+        individual lookup is propagated immediately, and remaining stock codes
+        are not requested.
+        """
+        if delay_seconds < 0:
+            raise ValueError("delay_seconds must be greater than or equal to 0")
+
+        quotes: list[StockQuote] = []
+        for index, stk_cd in enumerate(stk_cds):
+            quotes.append(self.get_stock_quote(stk_cd, access_token))
+            if delay_seconds > 0 and index < len(stk_cds) - 1:
+                time.sleep(delay_seconds)
+        return quotes
 
 
 def _first_present(payload: dict[str, Any], *keys: str) -> Any:
