@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib import error, request
 
-from trading_agent.config import KiwoomConfig
+from config import KiwoomConfig
 
 
 @dataclass(frozen=True)
