@@ -18,13 +18,14 @@ except ImportError:  # pragma: no cover - supports direct script-style imports
 class QuotePollingConfig:
     """Configuration for repeatedly collecting quote snapshots."""
 
-    stock_codes: list[str]
+    stock_codes: tuple[str, ...]
     interval_seconds: float = 5.0
     per_request_delay_seconds: float = 0.0
     max_iterations: int | None = None
     fail_fast: bool = True
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "stock_codes", tuple(self.stock_codes))
         if not self.stock_codes:
             raise ValueError("stock_codes must not be empty")
         if self.interval_seconds <= 0:
