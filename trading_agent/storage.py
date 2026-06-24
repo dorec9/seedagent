@@ -121,7 +121,42 @@ class QuoteSnapshotStore:
     def save_quotes(self, quotes: list[StockQuote], observed_at: datetime | None = None) -> list[int]:
         """Persist multiple quote snapshots and return generated row ids."""
         saved_at = _ensure_aware_utc(observed_at)
-        return [self.save_quote(quote, saved_at) for quote in quotes]
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    ids: list[int] = []
+                    for quote in quotes:
+                        cur.execute(
+                            """
+                            INSERT INTO price_snapshots (
+                                stock_code, stock_name, current_price, change_price,
+                                change_rate, volume, observed_at, raw
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                            RETURNING id
+                            """,
+                            (
+                                quote.stock_code,
+                                quote.stock_name,
+                                quote.current_price,
+                                quote.change_price,
+                                quote.change_rate,
+                                quote.volume,
+                                saved_at,
+                                Jsonb(quote.raw),
+                            ),
+                        )
+                        row = cur.fetchone()
+                        if row is None:
+                            raise StorageError("Failed to save quote snapshot")
+                        ids.append(int(row[0]))
+                    return ids
+        except StorageError:
+            raise
+        except Exception as exc:
+            if _is_database_error(exc):
+                raise StorageError("Failed to save quote snapshot") from None
+            raise
 
     def get_latest_quote(self, stock_code: str) -> QuoteSnapshot | None:
         """Return the latest snapshot for a stock code, or None when absent."""
