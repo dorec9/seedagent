@@ -92,16 +92,16 @@ Python 기반 키움 REST API 자동매매 시스템의 초기 인증 모듈입�
 `KiwoomMarketData`는 설정의 `base_url`을 사용해 운영/모의투자 환경을 선택하고, 키움 REST API `ka10001` 주식기본정보요청으로 특정 종목의 현재가를 조회합니다. 키움 응답에서 현재가는 부호가 포함될 수 있으므로 `current_price`는 절대값 가격으로 정규화하고, `change_price`는 전일대비 방향을 알 수 있도록 부호를 유지합니다.
 
 ```python
-from trading_agent.config import load_config
-from trading_agent.auth import KiwoomAuth
-from trading_agent.market_data import KiwoomMarketData
+from config import load_config
+from market_data import KiwoomMarketData
 
 config = load_config()
-auth = KiwoomAuth(config)
-token_result = auth.issue_access_token()
+
+# KiwoomAuth.issue_access_token() currently returns only metadata and does not expose the token.
+access_token = "<YOUR_KIWOOM_ACCESS_TOKEN>"
 
 market_data = KiwoomMarketData(config)
-quote = market_data.get_stock_quote("005930", token_result.access_token)
+quote = market_data.get_stock_quote("005930", access_token)
 print(quote.current_price)
 ```
 
