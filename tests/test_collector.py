@@ -1,7 +1,11 @@
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import Mock, call
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "trading_agent"))
 
 from collector import QuoteCollectionResult, QuotePollingCollector, QuotePollingConfig
 from market_data import KiwoomAPIError, StockQuote
