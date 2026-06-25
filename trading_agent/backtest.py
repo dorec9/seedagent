@@ -110,6 +110,18 @@ class BacktestEngine:
         return BacktestEngine._build_result(trades, equity_curve, config.initial_capital)
 
     @staticmethod
+    def run_selected_records(records: Sequence[dict[str, object]], config: BacktestConfig) -> BacktestResult:
+        """Run the simulator on records that were already selected by a strategy.
+
+        Benchmark helpers use this method to share the same cash, open-position,
+        future_at realization, and transaction-cost rules as model backtests while
+        varying only the candidate selection policy.
+        """
+        BacktestEngine._validate_records(records)
+        trades, equity_curve = BacktestEngine._simulate_trades(records, config)
+        return BacktestEngine._build_result(trades, equity_curve, config.initial_capital)
+
+    @staticmethod
     def write_trades_csv(result: BacktestResult, path: str | Path) -> None:
         fieldnames = [
             "stock_code",
