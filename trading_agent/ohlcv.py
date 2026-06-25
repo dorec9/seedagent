@@ -155,18 +155,22 @@ class OhlcvBackfillRunner:
 @dataclass(frozen=True)
 class OhlcvTrainingDatasetConfig:
     interval: str = "1d"
-    lookback_bars: int = 20
+    lookback_bars: int = 60
     prediction_horizon_bars: int = 5
     target_return_pct: float = 1.0
-    min_bars: int = 30
+    min_bars: int = 60
     max_bars_per_stock: int = 10000
+    include_advanced_features: bool = True
+    min_lookback_for_advanced_features: int = 60
 
     def __post_init__(self) -> None:
         if self.interval not in SUPPORTED_OHLCV_INTERVALS:
             raise ValueError(f"unsupported OHLCV interval: {self.interval}")
-        for name in ("lookback_bars", "prediction_horizon_bars", "min_bars", "max_bars_per_stock"):
+        for name in ("lookback_bars", "prediction_horizon_bars", "min_bars", "max_bars_per_stock", "min_lookback_for_advanced_features"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be greater than 0")
+        if self.include_advanced_features and self.lookback_bars < self.min_lookback_for_advanced_features:
+            raise ValueError("lookback_bars must be at least min_lookback_for_advanced_features when include_advanced_features=True")
 
 
 @dataclass(frozen=True)
@@ -174,10 +178,21 @@ class OhlcvTrainingExample:
     stock_code: str; evaluated_at: datetime; current_close: int
     return_1: float; return_3: float; return_5: float; return_10: float; return_20: float
     volume_change_5: float; volatility_5: float; volatility_20: float; price_position_20: float
-    future_close: int; future_at: datetime; future_return_pct: float; label: int
+    ma_5: float = 0.0; ma_20: float = 0.0; ma_60: float = 0.0
+    close_to_ma5_pct: float = 0.0; close_to_ma20_pct: float = 0.0; close_to_ma60_pct: float = 0.0
+    ma5_to_ma20_pct: float = 0.0; ma20_to_ma60_pct: float = 0.0; trend_strength_20: float = 0.0
+    rsi_14: float = 0.0; macd: float = 0.0; macd_signal: float = 0.0; macd_hist: float = 0.0; momentum_20: float = 0.0; momentum_60: float = 0.0
+    bollinger_upper_20: float = 0.0; bollinger_lower_20: float = 0.0; bollinger_position_20: float = 0.5
+    range_pct: float = 0.0; avg_range_5: float = 0.0; avg_range_20: float = 0.0; volatility_ratio_5_20: float = 0.0
+    volume_ma_5: float = 0.0; volume_ma_20: float = 0.0; volume_ratio_5: float = 0.0; volume_ratio_20: float = 0.0; volume_zscore_20: float = 0.0
+    gap_return_pct: float = 0.0; intraday_return_pct: float = 0.0; close_position_in_day: float = 0.5; close_position_20: float = 0.5
+    high_breakout_20: float = 0.0; low_breakdown_20: float = 0.0; distance_to_high_20_pct: float = 0.0; distance_from_low_20_pct: float = 0.0
+    relative_strength_20: float = 0.0; relative_strength_60: float = 0.0
+    future_close: int = 0; future_at: datetime = datetime.min.replace(tzinfo=timezone.utc); future_return_pct: float = 0.0; label: int = 0
 
 
 class OhlcvTrainingDatasetBuilder:
+    BASE_CSV_COLUMNS = ["stock_code", "evaluated_at", "current_close", "return_1", "return_3", "return_5", "return_10", "return_20", "volume_change_5", "volatility_5", "volatility_20", "price_position_20", "future_close", "future_at", "future_return_pct", "label"]
     CSV_COLUMNS = list(OhlcvTrainingExample.__dataclass_fields__.keys())
 
     def __init__(self, store: Any, config: OhlcvTrainingDatasetConfig) -> None:
@@ -200,20 +215,40 @@ class OhlcvTrainingDatasetBuilder:
                 stock_code=stock_code, evaluated_at=current.bar_time, current_close=current.close_price,
                 return_1=_ret(window, 1), return_3=_ret(window, 3), return_5=_ret(window, 5), return_10=_ret(window, 10), return_20=_ret(window, 20),
                 volume_change_5=_volume_change(window, 5), volatility_5=_volatility(window, 5), volatility_20=_volatility(window, 20), price_position_20=_position(window, 20),
+                **(_advanced_features(window) if self.config.include_advanced_features else {}),
                 future_close=future.close_price, future_at=future.bar_time, future_return_pct=future_return_pct,
                 label=1 if future_return_pct >= self.config.target_return_pct else 0,
             ))
         return out
 
     def build(self, stock_codes: Sequence[str], start: datetime | None = None, end: datetime | None = None) -> list[OhlcvTrainingExample]:
-        return [ex for code in stock_codes for ex in self.build_for_stock(code, start, end)]
+        examples = [ex for code in stock_codes for ex in self.build_for_stock(code, start, end)]
+        if self.config.include_advanced_features:
+            self._apply_relative_strength(examples)
+        return examples
 
     def to_records(self, examples: Sequence[OhlcvTrainingExample]) -> list[dict[str, object]]:
         return [{k: (_dt(v) if isinstance(v, datetime) else v) for k, v in ex.__dict__.items()} for ex in examples]
 
     def write_csv(self, examples: Sequence[OhlcvTrainingExample], path: str | Path) -> None:
+        columns = self.CSV_COLUMNS if self.config.include_advanced_features else self.BASE_CSV_COLUMNS
+        rows = self.to_records(examples)
+        if not self.config.include_advanced_features:
+            rows = [{key: row[key] for key in columns} for row in rows]
         with Path(path).open("w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=self.CSV_COLUMNS); w.writeheader(); w.writerows(self.to_records(examples))
+            w = csv.DictWriter(f, fieldnames=columns); w.writeheader(); w.writerows(rows)
+
+    @staticmethod
+    def _apply_relative_strength(examples: Sequence[OhlcvTrainingExample]) -> None:
+        by_date: dict[datetime, list[OhlcvTrainingExample]] = {}
+        for ex in examples:
+            by_date.setdefault(ex.evaluated_at, []).append(ex)
+        for items in by_date.values():
+            avg20 = sum(ex.momentum_20 for ex in items) / len(items) if items else 0.0
+            avg60 = sum(ex.momentum_60 for ex in items) / len(items) if items else 0.0
+            for ex in items:
+                object.__setattr__(ex, "relative_strength_20", ex.momentum_20 - avg20)
+                object.__setattr__(ex, "relative_strength_60", ex.momentum_60 - avg60)
 
 
 def ensure_aware_utc(value: datetime) -> datetime:
@@ -260,3 +295,73 @@ def _volatility(w: list[OhlcvBar], n: int) -> float:
 def _position(w: list[OhlcvBar], n: int) -> float:
     vals = w[-n:]; lo = min(b.low_price for b in vals); hi = max(b.high_price for b in vals)
     return 0.0 if hi == lo else (w[-1].close_price - lo) / (hi - lo) * 100
+
+
+def _mean(values: Sequence[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+def _pct(numerator: float, denominator: float) -> float:
+    return numerator / denominator * 100 if denominator else 0.0
+
+def _ma(w: list[OhlcvBar], n: int) -> float:
+    return _mean([b.close_price for b in w[-n:]])
+
+def _ema(values: Sequence[float], period: int) -> float:
+    if not values:
+        return 0.0
+    alpha = 2 / (period + 1)
+    ema = values[0]
+    for value in values[1:]:
+        ema = value * alpha + ema * (1 - alpha)
+    return ema
+
+def _rsi(w: list[OhlcvBar], n: int = 14) -> float:
+    if len(w) <= n:
+        return 0.0
+    changes = [w[i].close_price - w[i - 1].close_price for i in range(len(w) - n, len(w))]
+    gains = [max(c, 0) for c in changes]
+    losses = [abs(min(c, 0)) for c in changes]
+    avg_gain = _mean(gains); avg_loss = _mean(losses)
+    if avg_loss == 0:
+        return 100.0 if avg_gain > 0 else 50.0
+    return 100 - (100 / (1 + avg_gain / avg_loss))
+
+def _advanced_features(w: list[OhlcvBar]) -> dict[str, float]:
+    close = w[-1].close_price; prev_close = w[-2].close_price if len(w) > 1 else close
+    ma5, ma20, ma60 = _ma(w, 5), _ma(w, 20), _ma(w, 60)
+    closes = [b.close_price for b in w]
+    macd = _ema(closes, 12) - _ema(closes, 26)
+    macd_series = [_ema(closes[:i], 12) - _ema(closes[:i], 26) for i in range(1, len(closes) + 1)]
+    macd_signal = _ema(macd_series, 9)
+    last20 = w[-20:]
+    highs20 = [b.high_price for b in last20]; lows20 = [b.low_price for b in last20]
+    high20, low20 = max(highs20), min(lows20)
+    std20 = _volatility_abs([b.close_price for b in last20])
+    upper = ma20 + 2 * std20; lower = ma20 - 2 * std20
+    day_range = w[-1].high_price - w[-1].low_price
+    range_pcts = [_pct(b.high_price - b.low_price, b.close_price) for b in w]
+    vol5 = _volatility(w, 5); vol20 = _volatility(w, 20)
+    vols = [float(b.volume or 0) for b in w]
+    vma5, vma20 = _mean(vols[-5:]), _mean(vols[-20:])
+    vstd20 = _volatility_abs(vols[-20:])
+    prior20 = w[-21:-1]
+    prior_high20 = max(b.high_price for b in prior20) if prior20 else high20
+    prior_low20 = min(b.low_price for b in prior20) if prior20 else low20
+    return {
+        "ma_5": ma5, "ma_20": ma20, "ma_60": ma60,
+        "close_to_ma5_pct": _pct(close - ma5, ma5), "close_to_ma20_pct": _pct(close - ma20, ma20), "close_to_ma60_pct": _pct(close - ma60, ma60),
+        "ma5_to_ma20_pct": _pct(ma5 - ma20, ma20), "ma20_to_ma60_pct": _pct(ma20 - ma60, ma60), "trend_strength_20": _pct(ma20 - _ma(w[:-20] if len(w) > 20 else w, 20), ma20),
+        "rsi_14": _rsi(w, 14), "macd": macd, "macd_signal": macd_signal, "macd_hist": macd - macd_signal, "momentum_20": _ret(w, 20), "momentum_60": _ret(w, 60),
+        "bollinger_upper_20": upper, "bollinger_lower_20": lower, "bollinger_position_20": 0.5 if upper == lower else (close - lower) / (upper - lower),
+        "range_pct": _pct(day_range, close), "avg_range_5": _mean(range_pcts[-5:]), "avg_range_20": _mean(range_pcts[-20:]), "volatility_ratio_5_20": vol5 / vol20 if vol20 else 0.0,
+        "volume_ma_5": vma5, "volume_ma_20": vma20, "volume_ratio_5": vols[-1] / vma5 if vma5 else 0.0, "volume_ratio_20": vols[-1] / vma20 if vma20 else 0.0, "volume_zscore_20": (vols[-1] - vma20) / vstd20 if vstd20 else 0.0,
+        "gap_return_pct": _pct(w[-1].open_price - prev_close, prev_close), "intraday_return_pct": _pct(close - w[-1].open_price, w[-1].open_price), "close_position_in_day": 0.5 if day_range == 0 else (close - w[-1].low_price) / day_range,
+        "close_position_20": 0.5 if high20 == low20 else (close - low20) / (high20 - low20), "high_breakout_20": 1.0 if close > prior_high20 else 0.0, "low_breakdown_20": 1.0 if close < prior_low20 else 0.0,
+        "distance_to_high_20_pct": _pct(close - high20, high20), "distance_from_low_20_pct": _pct(close - low20, low20),
+    }
+
+def _volatility_abs(values: Sequence[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+    mean = _mean(values)
+    return math.sqrt(sum((v - mean) ** 2 for v in values) / len(values))
