@@ -1,6 +1,4 @@
 import csv
-import math
-
 import pytest
 
 from trading_agent.backtest import BacktestConfig, BacktestEngine, BacktestError
@@ -112,6 +110,38 @@ def test_empty_trade_result_is_not_error():
     assert result.equity_curve == []
 
 
+def test_pnl_is_realized_only_on_future_at_and_entry_deducts_cash():
+    records = [
+        row("A", 1, 0.9, current=100, future=110),
+        {**row("B", 1, 0.8, current=100, future=110), "evaluated_at": "2024-01-01T10:00:00", "future_at": "2024-01-03T09:00:00"},
+    ]
+
+    result = BacktestEngine.run(records, BacktestConfig(strategy="threshold", initial_capital=1_000_000, position_size_pct=0.6))
+
+    assert [trade.stock_code for trade in result.trades] == ["A"]
+    assert result.equity_curve[0]["event_at"] == "2024-01-02T09:00:00"
+    assert result.equity_curve[0]["cash"] == pytest.approx(1_058_140)
+
+
+def test_same_stock_can_be_rebought_after_position_exits():
+    records = [row("A", 1, 0.9), row("A", 2, 0.8)]
+
+    result = BacktestEngine.run(records, BacktestConfig(strategy="threshold", threshold=0.6, allow_rebuy_same_stock=False))
+
+    assert [trade.stock_code for trade in result.trades] == ["A", "A"]
+
+
+def test_same_stock_cannot_be_rebought_while_position_is_open():
+    records = [
+        {**row("A", 1, 0.9), "future_at": "2024-01-04T09:00:00"},
+        row("A", 2, 0.8),
+    ]
+
+    result = BacktestEngine.run(records, BacktestConfig(strategy="threshold", threshold=0.6, allow_rebuy_same_stock=False))
+
+    assert [trade.stock_code for trade in result.trades] == ["A"]
+
+
 def test_trades_csv_writing(tmp_path):
     result = BacktestEngine.run([row("A", 1, 0.9)], BacktestConfig(strategy="threshold"))
     path = tmp_path / "trades.csv"
@@ -133,4 +163,5 @@ def test_equity_curve_csv_writing(tmp_path):
     with path.open(newline="", encoding="utf-8") as file_obj:
         rows = list(csv.DictReader(file_obj))
     assert rows[0]["date"] == "2024-01-02"
+    assert rows[0]["event_at"] == "2024-01-02T09:00:00"
     assert float(rows[0]["equity"]) > 10_000_000

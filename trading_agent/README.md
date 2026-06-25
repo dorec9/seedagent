@@ -570,7 +570,7 @@ cost_pct = (fee_rate * 2 + tax_rate + slippage_rate * 2) * 100
 net_return_pct = gross_return_pct - cost_pct
 ```
 
-기본값은 `fee_rate=0.00015`, `tax_rate=0.0018`, `slippage_rate=0.0005`입니다. 각 거래의 `position_value`는 현재 equity의 `position_size_pct`로 계산하고, 같은 날짜에 여러 종목을 매수할 때 총 투자금이 equity를 초과하지 않도록 제한합니다. 손익은 `future_at` 날짜에 실현된 것으로 보며, 날짜별 실현 손익을 누적해 equity curve와 최대 낙폭(MDD)을 계산합니다.
+기본값은 `fee_rate=0.00015`, `tax_rate=0.0018`, `slippage_rate=0.0005`입니다. 각 거래의 `position_value`는 현재 equity의 `position_size_pct`로 계산합니다. 진입 시점(`evaluated_at`)에는 position value를 available cash에서 차감하고, 청산 시점(`future_at`)에만 position value와 realized PnL을 cash로 되돌립니다. available cash가 부족하면 새 포지션을 열지 않아 총 open position value가 사용 가능한 자본을 초과하지 않습니다. `allow_rebuy_same_stock=False`이면 같은 종목의 기존 포지션이 열려 있는 동안에는 재매수하지 않고, 기존 포지션이 `future_at`에 청산된 뒤에는 다시 매수할 수 있습니다. Equity curve는 `future_at`별 realized PnL, cash, open position value, equity를 기록하며 이를 기준으로 최대 낙폭(MDD)을 계산합니다.
 
 ### 백테스트 해석 주의사항
 
