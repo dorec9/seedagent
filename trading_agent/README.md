@@ -577,3 +577,89 @@ net_return_pct = gross_return_pct - cost_pct
 - 모델의 accuracy가 수익률을 의미하지 않습니다. 낮은 accuracy에서도 일부 threshold 또는 top-k 구간의 손익 특성이 다를 수 있고, 반대로 높은 accuracy라도 거래비용 반영 후 손실이 날 수 있습니다.
 - validation 성능과 백테스트 성능은 실거래 수익을 보장하지 않습니다. 과최적화, 표본 부족, 거래 정지/호가 공백, 체결 실패, 시장 충격, 슬리피지 확대가 실제 성과를 크게 바꿀 수 있습니다.
 - 실거래 전에는 별도의 paper trading, risk guard, 주문 차단/한도 로직, 계좌/체결 검증, 장애 대응 절차가 필요합니다.
+
+## Benchmark & Walk-forward Backtest
+
+`trading_agent.benchmark`는 OHLCV prediction CSV의 모델 신호가 단순 상승장 효과인지, 실제 종목 선택 능력인지 확인하기 위한 benchmark와 walk-forward helper를 제공합니다. 입력 CSV에는 `stock_code`, `evaluated_at`, `current_close`, `future_close`, `future_at`, `future_return_pct`, `label`, `proba` 컬럼이 필요합니다.
+
+> 단일 validation 기간의 수익률만으로 실전 투자를 결정하면 안 됩니다. 모델 top-k 전략이 equal-weight, buy-all, random top-k, inverse signal benchmark를 일관되게 이기지 못한다면 모델의 `proba`를 유의미한 종목 선택 신호로 보기 어렵습니다.
+
+### model top-k 전략과 benchmark 비교 예시
+
+```python
+from trading_agent.benchmark import BenchmarkConfig, BenchmarkEngine
+
+config = BenchmarkConfig(
+    initial_capital=10_000_000,
+    position_size_pct=0.1,
+    top_k=3,
+    random_seed=42,
+    random_trials=100,
+)
+comparison = BenchmarkEngine.run_from_csv("model_predictions_valid.csv", config)
+print(comparison.model_strategy.net_total_return_pct)
+print(comparison.model_excess_vs_equal_weight_pct)
+print(comparison.model_excess_vs_random_mean_pct)
+```
+
+비교 결과는 CSV로 저장할 수 있습니다.
+
+```python
+BenchmarkEngine.write_comparison_csv(comparison, "benchmark_comparison.csv")
+```
+
+### equal-weight benchmark 예시
+
+Equal-weight benchmark는 날짜별 사용 가능한 모든 후보를 동일한 position sizing 규칙으로 매수 대상으로 보며, `proba`는 사용하지 않습니다. 실제 진입 가능 여부는 기존 `BacktestEngine`과 같은 cash/open position/future_at 실현 규칙을 따릅니다.
+
+```python
+equal_weight = BenchmarkEngine.run_equal_weight(records, config)
+print(equal_weight.net_total_return_pct, equal_weight.max_drawdown_pct)
+```
+
+### random top-k benchmark 예시
+
+Random top-k benchmark는 날짜별 후보 중 최대 `top_k`개를 무작위로 선택하고 `random_trials`회 반복합니다. `random_seed`가 같으면 결과가 재현됩니다.
+
+```python
+random_trials = BenchmarkEngine.run_random_top_k_trials(records, config)
+for trial in random_trials:
+    print(trial.name, trial.net_total_return_pct, trial.max_drawdown_pct, trial.profit_factor)
+```
+
+### inverse signal benchmark 예시
+
+Inverse signal benchmark는 날짜별 `proba`가 가장 낮은 종목부터 `top_k`개를 선택합니다. 모델 신호가 강하다면 inverse signal은 model top-k보다 낮은 성능을 보이는 것이 자연스럽습니다.
+
+```python
+inverse = BenchmarkEngine.run_inverse_signal(records, config)
+print(inverse.net_total_return_pct, inverse.profit_factor)
+```
+
+### 월별/연도별 성능 분해 예시
+
+성능 분해는 완료된 trades의 `future_at` 기준 period별로 거래 수, 승률, 순수익률, 평균 거래 수익률, profit factor를 계산합니다.
+
+```python
+from trading_agent.backtest import BacktestConfig, BacktestEngine
+
+result = BacktestEngine.run_from_csv(
+    "model_predictions_valid.csv",
+    BacktestConfig(strategy="top_k_per_day", top_k=3),
+)
+monthly = BenchmarkEngine.monthly_breakdown(result)
+yearly = BenchmarkEngine.yearly_breakdown(result)
+print(monthly)
+print(yearly)
+```
+
+### walk-forward 검증 예시
+
+Walk-forward helper는 이미 `proba`가 포함된 prediction CSV를 시간순 구간으로 나누어 같은 top-k 전략을 반복 검증합니다. 초기 구현은 모델 재학습을 수행하지 않으며, yearly 또는 quarterly 구간을 지원합니다.
+
+```python
+walk_forward_rows = BenchmarkEngine.walk_forward(records, config, frequency="yearly")
+quarterly_rows = BenchmarkEngine.walk_forward(records, config, frequency="quarterly")
+for row in walk_forward_rows:
+    print(row["period_start"], row["period_end"], row["net_total_return_pct"])
+```
