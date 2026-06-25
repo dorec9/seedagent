@@ -135,3 +135,37 @@ def test_random_trials_less_than_one_raises_error():
 def test_top_k_less_than_one_raises_error():
     with pytest.raises(BacktestError, match="top_k"):
         BenchmarkConfig(top_k=0)
+
+
+def test_walk_forward_from_csv_accepts_path(tmp_path):
+    path = tmp_path / "predictions.csv"
+    import csv
+    rows = records()
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader(); writer.writerows(rows)
+    result = BenchmarkEngine.walk_forward_from_csv(path, BenchmarkConfig(top_k=1), period="monthly")
+    assert len(result) == 3
+
+
+def test_walk_forward_accepts_records_and_supported_periods():
+    assert len(BenchmarkEngine.walk_forward(records(), BenchmarkConfig(top_k=1), period="monthly")) == 3
+    assert len(BenchmarkEngine.walk_forward(records(), BenchmarkConfig(top_k=1), period="quarterly")) == 2
+    assert len(BenchmarkEngine.walk_forward(records(), BenchmarkConfig(top_k=1), period="yearly")) == 2
+
+
+def test_walk_forward_unsupported_period_raises_error():
+    with pytest.raises(BacktestError, match="period"):
+        BenchmarkEngine.walk_forward(records(), BenchmarkConfig(), period="weekly")
+
+
+def test_readme_walk_forward_example_call_shape(tmp_path):
+    path = tmp_path / "predictions.csv"
+    import csv
+    rows = records()
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader(); writer.writerows(rows)
+    cfg = BenchmarkConfig(top_k=1)
+    assert BenchmarkEngine.walk_forward_from_csv(path, cfg, period="monthly")
+    assert BenchmarkEngine.walk_forward(rows, cfg, period="quarterly")
