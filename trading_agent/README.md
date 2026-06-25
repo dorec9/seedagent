@@ -503,4 +503,77 @@ examples = builder.build(["005930", "000660"])
 builder.write_csv(examples, "training_dataset.csv")
 ```
 
-> ⚠️ Validation 성능은 실제 매매 수익을 보장하지 않습니다. 실거래 전에는 수수료, 세금, 슬리피지, 체결 실패를 반영한 별도 백테스트와 검증이 필요합니다. 이 기능은 주문 실행, 계좌 조회, paper trading, 실거래, 백테스트 엔진을 포함하지 않습니다.
+> ⚠️ Validation 성능은 실제 매매 수익을 보장하지 않습니다. 실거래 전에는 수수료, 세금, 슬리피지, 체결 실패를 반영한 별도 백테스트와 검증이 필요합니다. 모델 학습 기능 자체는 주문 실행, 계좌 조회, paper trading, 실거래를 포함하지 않습니다.
+
+## Backtest Engine
+
+`trading_agent.backtest`는 OHLCV 기반 모델이 이미 계산한 상승 확률(`proba`)을 사용해 오프라인 백테스트를 수행합니다. 이 엔진은 실거래 주문, 계좌 조회, Kiwoom 주문 API, paper trading, 실시간 collector 연동을 하지 않으며, `training_dataset.csv` 또는 같은 스키마의 예측 CSV를 검증하는 용도입니다.
+
+필수 입력 컬럼은 다음과 같습니다.
+
+| 컬럼 | 설명 |
+| --- | --- |
+| `stock_code` | 종목 코드 |
+| `evaluated_at` | 신호 평가 시각 |
+| `current_close` | 진입 기준 종가 |
+| `future_close` | 청산 기준 미래 종가 |
+| `future_at` | 청산 기준 시각 |
+| `future_return_pct` | 실제 미래 수익률 |
+| `label` | 실제 상승/하락 라벨 |
+| `proba` | 모델이 예측한 상승 확률 |
+
+### threshold 전략 예시
+
+`threshold` 전략은 `proba >= threshold`인 행만 매수 후보로 선택합니다. 같은 날짜의 같은 종목은 `proba`가 가장 높은 행 하나만 사용하며, `max_positions_per_day`가 지정되면 날짜별 후보를 `proba` 높은 순서로 제한합니다.
+
+```python
+from trading_agent.backtest import BacktestConfig, BacktestEngine
+
+config = BacktestConfig(
+    strategy="threshold",
+    threshold=0.60,
+    initial_capital=10_000_000,
+    position_size_pct=0.1,
+)
+
+result = BacktestEngine.run_from_csv("training_dataset_with_proba.csv", config)
+BacktestEngine.write_trades_csv(result, "backtest_trades_threshold.csv")
+BacktestEngine.write_equity_curve_csv(result, "backtest_equity_threshold.csv")
+print(result.final_equity, result.max_drawdown_pct, result.win_rate)
+```
+
+### top-k per day 전략 예시
+
+`top_k_per_day` 전략은 날짜별로 `proba` 상위 `top_k`개 종목만 선택합니다. 같은 날짜의 같은 종목이 여러 번 있으면 가장 높은 `proba` 하나만 남깁니다.
+
+```python
+from trading_agent.backtest import BacktestConfig, BacktestEngine
+
+config = BacktestConfig(
+    strategy="top_k_per_day",
+    top_k=3,
+    initial_capital=10_000_000,
+    position_size_pct=0.1,
+)
+
+result = BacktestEngine.run_from_csv("training_dataset_with_proba.csv", config)
+BacktestEngine.write_trades_csv(result, "backtest_trades_top_k.csv")
+BacktestEngine.write_equity_curve_csv(result, "backtest_equity_top_k.csv")
+```
+
+### 수수료, 세금, 슬리피지 반영
+
+백테스트의 총 거래비용은 매수 수수료, 매도 수수료, 세금, 왕복 슬리피지를 합산합니다.
+
+```text
+cost_pct = (fee_rate * 2 + tax_rate + slippage_rate * 2) * 100
+net_return_pct = gross_return_pct - cost_pct
+```
+
+기본값은 `fee_rate=0.00015`, `tax_rate=0.0018`, `slippage_rate=0.0005`입니다. 각 거래의 `position_value`는 현재 equity의 `position_size_pct`로 계산하고, 같은 날짜에 여러 종목을 매수할 때 총 투자금이 equity를 초과하지 않도록 제한합니다. 손익은 `future_at` 날짜에 실현된 것으로 보며, 날짜별 실현 손익을 누적해 equity curve와 최대 낙폭(MDD)을 계산합니다.
+
+### 백테스트 해석 주의사항
+
+- 모델의 accuracy가 수익률을 의미하지 않습니다. 낮은 accuracy에서도 일부 threshold 또는 top-k 구간의 손익 특성이 다를 수 있고, 반대로 높은 accuracy라도 거래비용 반영 후 손실이 날 수 있습니다.
+- validation 성능과 백테스트 성능은 실거래 수익을 보장하지 않습니다. 과최적화, 표본 부족, 거래 정지/호가 공백, 체결 실패, 시장 충격, 슬리피지 확대가 실제 성과를 크게 바꿀 수 있습니다.
+- 실거래 전에는 별도의 paper trading, risk guard, 주문 차단/한도 로직, 계좌/체결 검증, 장애 대응 절차가 필요합니다.
