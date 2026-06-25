@@ -494,14 +494,41 @@ builder = OhlcvTrainingDatasetBuilder(
     store=store,
     config=OhlcvTrainingDatasetConfig(
         interval="1d",
-        lookback_bars=20,
+        lookback_bars=60,
         prediction_horizon_bars=5,
         target_return_pct=1.0,
+        include_advanced_features=True,
     ),
 )
 examples = builder.build(["005930", "000660"])
 builder.write_csv(examples, "training_dataset.csv")
 ```
+
+## Advanced OHLCV Feature Engineering
+
+`OhlcvTrainingDatasetBuilder` can emit advanced, leak-free technical features when `OhlcvTrainingDatasetConfig(include_advanced_features=True)` is enabled. Because 60-day windows are needed for `ma_60`, `momentum_60`, and `relative_strength_60`, set `lookback_bars >= 60`; the config raises a clear `ValueError` when advanced features are enabled with a smaller lookback.
+
+Feature groups added to the CSV include:
+
+- Price/trend: `ma_5`, `ma_20`, `ma_60`, `close_to_ma5_pct`, `close_to_ma20_pct`, `close_to_ma60_pct`, `ma5_to_ma20_pct`, `ma20_to_ma60_pct`, `trend_strength_20`
+- Momentum: `rsi_14`, `macd`, `macd_signal`, `macd_hist`, `momentum_20`, `momentum_60`
+- Volatility: `bollinger_upper_20`, `bollinger_lower_20`, `bollinger_position_20`, `range_pct`, `avg_range_5`, `avg_range_20`, `volatility_ratio_5_20`
+- Volume: `volume_ma_5`, `volume_ma_20`, `volume_ratio_5`, `volume_ratio_20`, `volume_zscore_20`
+- Candle/location: `gap_return_pct`, `intraday_return_pct`, `close_position_in_day`, `close_position_20`, `high_breakout_20`, `low_breakdown_20`, `distance_to_high_20_pct`, `distance_from_low_20_pct`
+- Relative strength: `relative_strength_20`, `relative_strength_60`, computed as each stock's 20/60-day return minus the same-date universe average 20/60-day return.
+
+All feature values use only bars available at `evaluated_at`. Target columns such as `future_close`, `future_at`, `future_return_pct`, and `label` are calculated after features and are never used as feature inputs. Breakout/breakdown indicators compare the current close only against the previous 20 bars, not future highs/lows.
+
+To export the legacy base feature schema only, disable advanced features:
+
+```python
+config = OhlcvTrainingDatasetConfig(
+    lookback_bars=20,
+    prediction_horizon_bars=5,
+    include_advanced_features=False,
+)
+```
+
 
 > ⚠️ Validation 성능은 실제 매매 수익을 보장하지 않습니다. 실거래 전에는 수수료, 세금, 슬리피지, 체결 실패를 반영한 별도 백테스트와 검증이 필요합니다. 모델 학습 기능 자체는 주문 실행, 계좌 조회, paper trading, 실거래를 포함하지 않습니다.
 
@@ -655,11 +682,17 @@ print(yearly)
 
 ### walk-forward 검증 예시
 
-Walk-forward helper는 이미 `proba`가 포함된 prediction CSV를 시간순 구간으로 나누어 같은 top-k 전략을 반복 검증합니다. 초기 구현은 모델 재학습을 수행하지 않으며, yearly 또는 quarterly 구간을 지원합니다.
+Walk-forward helper는 이미 `proba`가 포함된 prediction CSV 또는 records를 시간순 구간으로 나누어 같은 top-k 전략을 반복 검증합니다. 초기 구현은 모델 재학습을 수행하지 않으며, `monthly`, `quarterly`, `yearly` period를 지원합니다. 모든 구간은 기존 `BacktestEngine`의 cash/open position/future_at realization 규칙을 그대로 사용합니다.
 
 ```python
-walk_forward_rows = BenchmarkEngine.walk_forward(records, config, frequency="yearly")
-quarterly_rows = BenchmarkEngine.walk_forward(records, config, frequency="quarterly")
-for row in walk_forward_rows:
+monthly_rows = BenchmarkEngine.walk_forward_from_csv(
+    "model_predictions_valid.csv",
+    config,
+    period="monthly",
+)
+quarterly_rows = BenchmarkEngine.walk_forward(records, config, period="quarterly")
+yearly_rows = BenchmarkEngine.walk_forward(records, config, period="yearly")
+
+for row in monthly_rows:
     print(row["period_start"], row["period_end"], row["net_total_return_pct"])
 ```

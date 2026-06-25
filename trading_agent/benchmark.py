@@ -144,13 +144,20 @@ class BenchmarkEngine:
         return BenchmarkEngine._period_breakdown(result, 4)
 
     @staticmethod
-    def walk_forward(records: Sequence[dict[str, object]], config: BenchmarkConfig = BenchmarkConfig(), frequency: str = "yearly") -> list[dict[str, object]]:
+    def walk_forward_from_csv(path: str | Path, config: BenchmarkConfig = BenchmarkConfig(), period: str = "monthly") -> list[dict[str, object]]:
+        with Path(path).open(newline="", encoding="utf-8") as file_obj:
+            return BenchmarkEngine.walk_forward(list(csv.DictReader(file_obj)), config, period=period)
+
+    @staticmethod
+    def walk_forward(records: Sequence[dict[str, object]], config: BenchmarkConfig = BenchmarkConfig(), period: str = "monthly", frequency: str | None = None) -> list[dict[str, object]]:
+        if frequency is not None:
+            period = frequency
         BenchmarkEngine._validate_records(records)
-        if frequency not in {"yearly", "quarterly"}:
-            raise BacktestError("frequency must be yearly or quarterly")
+        if period not in {"monthly", "quarterly", "yearly"}:
+            raise BacktestError("period must be monthly, quarterly, or yearly")
         grouped: dict[str, list[dict[str, object]]] = {}
         for record in records:
-            key = BenchmarkEngine._period_key(str(record["evaluated_at"]), frequency)
+            key = BenchmarkEngine._period_key(str(record["evaluated_at"]), period)
             grouped.setdefault(key, []).append(record)
         rows = []
         for key in sorted(grouped):
@@ -254,9 +261,11 @@ class BenchmarkEngine:
         return rows
 
     @staticmethod
-    def _period_key(value: str, frequency: str) -> str:
-        if frequency == "yearly":
+    def _period_key(value: str, period: str) -> str:
+        if period == "yearly":
             return value[:4]
+        if period == "monthly":
+            return value[:7]
         month = int(value[5:7])
         quarter = (month - 1) // 3 + 1
         return f"{value[:4]}-Q{quarter}"
