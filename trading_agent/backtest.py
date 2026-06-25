@@ -132,7 +132,7 @@ class BacktestEngine:
 
     @staticmethod
     def write_equity_curve_csv(result: BacktestResult, path: str | Path) -> None:
-        fieldnames = ["date", "realized_pnl", "equity"]
+        fieldnames = ["date", "event_at", "realized_pnl", "cash", "open_position_value", "equity"]
         with Path(path).open("w", newline="", encoding="utf-8") as file_obj:
             writer = csv.DictWriter(file_obj, fieldnames=fieldnames)
             writer.writeheader()
@@ -152,11 +152,8 @@ class BacktestEngine:
             grouped.setdefault(BacktestEngine._date_key(record["evaluated_at"]), []).append(record)
 
         selected: list[dict[str, object]] = []
-        seen_stocks: set[str] = set()
         for date_key in sorted(grouped):
             unique_by_stock = BacktestEngine._dedupe_same_day_stock(grouped[date_key])
-            if not config.allow_rebuy_same_stock:
-                unique_by_stock = [row for row in unique_by_stock if str(row["stock_code"]) not in seen_stocks]
             if config.strategy == "threshold":
                 candidates = [row for row in unique_by_stock if BacktestEngine._float(row["proba"], "proba") >= config.threshold]
                 candidates.sort(key=lambda row: BacktestEngine._float(row["proba"], "proba"), reverse=True)
@@ -167,8 +164,6 @@ class BacktestEngine:
             else:  # pragma: no cover - config validation prevents this path
                 raise BacktestError("unsupported strategy")
             selected.extend(candidates)
-            if not config.allow_rebuy_same_stock:
-                seen_stocks.update(str(row["stock_code"]) for row in candidates)
         return selected
 
     @staticmethod
@@ -182,30 +177,59 @@ class BacktestEngine:
 
     @staticmethod
     def _simulate_trades(records: Sequence[dict[str, object]], config: BacktestConfig) -> tuple[list[BacktestTrade], list[dict[str, object]]]:
-        equity = config.initial_capital
+        cash = config.initial_capital
         trades: list[BacktestTrade] = []
         equity_curve: list[dict[str, object]] = []
-        pending_pnl_by_exit_date: dict[str, float] = {}
+        open_positions: list[dict[str, object]] = []
 
-        def realize_pnl_through(date_key: str | None = None) -> None:
-            nonlocal equity
-            due_dates = sorted(
-                exit_date for exit_date in pending_pnl_by_exit_date if date_key is None or exit_date <= date_key
+        def current_equity() -> float:
+            open_value = sum(BacktestEngine._float(position["position_value"], "position_value") for position in open_positions)
+            return cash + open_value
+
+        def append_equity_point(event_at: str, realized_pnl: float) -> None:
+            equity_curve.append(
+                {
+                    "date": BacktestEngine._date_key(event_at),
+                    "event_at": event_at,
+                    "realized_pnl": realized_pnl,
+                    "cash": cash,
+                    "open_position_value": sum(
+                        BacktestEngine._float(position["position_value"], "position_value") for position in open_positions
+                    ),
+                    "equity": current_equity(),
+                }
             )
-            for exit_date in due_dates:
-                realized_pnl = pending_pnl_by_exit_date.pop(exit_date)
-                equity += realized_pnl
-                equity_curve.append({"date": exit_date, "realized_pnl": realized_pnl, "equity": equity})
 
-        records_by_entry_date: dict[str, list[dict[str, object]]] = {}
+        def close_due_positions(event_at: str | None = None) -> None:
+            nonlocal cash, open_positions
+            due_positions = [
+                position
+                for position in open_positions
+                if event_at is None or str(position["exit_at"]) <= event_at
+            ]
+            for position in sorted(due_positions, key=lambda item: str(item["exit_at"])):
+                open_positions.remove(position)
+                position_value = BacktestEngine._float(position["position_value"], "position_value")
+                profit_loss = BacktestEngine._float(position["profit_loss"], "profit_loss")
+                cash += position_value + profit_loss
+                append_equity_point(str(position["exit_at"]), profit_loss)
+
+        records_by_entry_at: dict[str, list[dict[str, object]]] = {}
         for record in records:
-            records_by_entry_date.setdefault(BacktestEngine._date_key(record["evaluated_at"]), []).append(record)
+            records_by_entry_at.setdefault(str(record["evaluated_at"]), []).append(record)
 
-        for entry_date in sorted(records_by_entry_date):
-            realize_pnl_through(entry_date)
-            day_records = records_by_entry_date[entry_date]
-            position_value = equity * min(config.position_size_pct, 1 / len(day_records))
+        for entry_at in sorted(records_by_entry_at):
+            close_due_positions(entry_at)
+            day_records = records_by_entry_at[entry_at]
+            entry_equity = current_equity()
+            desired_position_value = entry_equity * config.position_size_pct
             for record in day_records:
+                stock_code = str(record["stock_code"])
+                if not config.allow_rebuy_same_stock and any(position["stock_code"] == stock_code for position in open_positions):
+                    continue
+                if desired_position_value > cash:
+                    continue
+
                 entry_price = BacktestEngine._float(record["current_close"], "current_close")
                 exit_price = BacktestEngine._float(record["future_close"], "future_close")
                 if entry_price <= 0:
@@ -213,25 +237,32 @@ class BacktestEngine:
                 gross_return_pct = (exit_price - entry_price) / entry_price * 100
                 cost_pct = (config.fee_rate * 2 + config.tax_rate + config.slippage_rate * 2) * 100
                 net_return_pct = gross_return_pct - cost_pct
-                profit_loss = position_value * net_return_pct / 100
+                profit_loss = desired_position_value * net_return_pct / 100
                 trade = BacktestTrade(
-                    stock_code=str(record["stock_code"]),
+                    stock_code=stock_code,
                     entry_at=record["evaluated_at"],
                     exit_at=record["future_at"],
                     entry_price=entry_price,
                     exit_price=exit_price,
                     gross_return_pct=gross_return_pct,
                     net_return_pct=net_return_pct,
-                    position_value=position_value,
+                    position_value=desired_position_value,
                     profit_loss=profit_loss,
                     proba=BacktestEngine._float(record["proba"], "proba"),
                     label=int(BacktestEngine._float(record["label"], "label")),
                 )
                 trades.append(trade)
-                exit_date = BacktestEngine._date_key(record["future_at"])
-                pending_pnl_by_exit_date[exit_date] = pending_pnl_by_exit_date.get(exit_date, 0.0) + profit_loss
+                cash -= desired_position_value
+                open_positions.append(
+                    {
+                        "stock_code": stock_code,
+                        "exit_at": str(record["future_at"]),
+                        "position_value": desired_position_value,
+                        "profit_loss": profit_loss,
+                    }
+                )
 
-        realize_pnl_through()
+        close_due_positions()
         return trades, equity_curve
 
     @staticmethod
