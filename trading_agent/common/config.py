@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -19,6 +19,7 @@ class KiwoomConfig:
     appkey: str | None
     secretkey: str | None
     database_url: str | None = None
+    account_no: str | None = None
 
     @property
     def base_url_loaded(self) -> bool:
@@ -31,6 +32,10 @@ class KiwoomConfig:
     @property
     def secretkey_loaded(self) -> bool:
         return bool(self.secretkey)
+
+    @property
+    def account_no_loaded(self) -> bool:
+        return bool(self.account_no)
 
     def validation_errors(self) -> list[str]:
         """Return clear validation errors without exposing secret values."""
@@ -52,4 +57,16 @@ def load_config() -> KiwoomConfig:
         appkey=os.getenv("KIWOOM_APPKEY"),
         secretkey=os.getenv("KIWOOM_SECRETKEY"),
         database_url=os.getenv("DATABASE_URL"),
+        account_no=os.getenv("KIWOOM_ACCOUNT_NO"),
     )
+
+@dataclass
+class BotConfig:
+    evaluation_interval: int = int(os.getenv("BOT_EVAL_INTERVAL", "10"))
+    target_stocks: list[str] = field(default_factory=lambda: os.getenv("BOT_TARGETS", "005930,000660,035420").split(","))
+    buy_threshold: float = float(os.getenv("BOT_BUY_THRESHOLD", "0.6"))
+    take_profit_pct: float = float(os.getenv("BOT_TAKE_PROFIT_PCT", "5.0"))
+    stop_loss_pct: float = float(os.getenv("BOT_STOP_LOSS_PCT", "-3.0"))
+    position_size_pct: float = float(os.getenv("BOT_POSITION_SIZE_PCT", "0.10"))
+    discord_webhook_url: str | None = os.getenv("DISCORD_WEBHOOK_URL")
+

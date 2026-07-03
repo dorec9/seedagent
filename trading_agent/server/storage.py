@@ -29,6 +29,20 @@ class StorageError(Exception):
 
 
 @dataclass(frozen=True)
+class OrderRecord:
+    """A persisted order record."""
+    id: int | None
+    order_no: str
+    stock_code: str
+    quantity: int
+    price: int
+    is_buy: bool
+    status: str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+@dataclass(frozen=True)
 class QuoteSnapshot:
     """A persisted stock quote snapshot."""
 
@@ -119,9 +133,151 @@ class QuoteSnapshotStore:
                 raise StorageError("Failed to initialize OHLCV storage") from exc
             raise
 
+    def initialize_orders(self) -> None:
+        """Create the orders table if it doesn't exist."""
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS orders (
+                            id BIGSERIAL PRIMARY KEY,
+                            order_no TEXT NOT NULL UNIQUE,
+                            stock_code TEXT NOT NULL,
+                            quantity BIGINT NOT NULL,
+                            price BIGINT NOT NULL,
+                            is_buy BOOLEAN NOT NULL,
+                            status TEXT NOT NULL,
+                            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                        )
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE INDEX IF NOT EXISTS idx_orders_status
+                        ON orders (status)
+                        """
+                    )
+        except Exception as exc:
+            if _is_database_error(exc):
+                raise StorageError("Failed to initialize orders storage") from exc
+            raise
+
+    def initialize_trade_logs(self) -> None:
+        """Create the trade logs table if it doesn't exist."""
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS trade_logs (
+                            id BIGSERIAL PRIMARY KEY,
+                            order_no TEXT,
+                            stock_code TEXT NOT NULL,
+                            stock_name TEXT,
+                            action TEXT NOT NULL,
+                            price BIGINT NOT NULL,
+                            quantity BIGINT NOT NULL,
+                            yield_pct DOUBLE PRECISION,
+                            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                        )
+                        """
+                    )
+        except Exception as exc:
+            if _is_database_error(exc):
+                raise StorageError("Failed to initialize trade_logs storage") from exc
+            raise
+
+    def save_trade_log(self, order_no: str, stock_code: str, stock_name: str, action: str, price: int, quantity: int, yield_pct: float = 0.0) -> None:
+        """Save a trade log to the database."""
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO trade_logs (order_no, stock_code, stock_name, action, price, quantity, yield_pct)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (order_no, stock_code, stock_name, action, price, quantity, yield_pct)
+                    )
+        except Exception as exc:
+            if _is_database_error(exc):
+                raise StorageError("Failed to save trade log") from exc
+            raise
+
     def save_ohlcv_bar(self, bar: OhlcvBar) -> int:
         """Persist one OHLCV bar with upsert semantics and return its row id."""
         return self.save_ohlcv_bars([bar])[0]
+
+    def save_order(self, order: OrderRecord) -> None:
+        """Save a new order to the database."""
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO orders (order_no, stock_code, quantity, price, is_buy, status)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (order_no) DO NOTHING
+                        """,
+                        (order.order_no, order.stock_code, order.quantity, order.price, order.is_buy, order.status)
+                    )
+        except Exception as exc:
+            if _is_database_error(exc):
+                raise StorageError("Failed to save order") from exc
+            raise
+
+    def get_pending_orders(self) -> list[OrderRecord]:
+        """Return all orders with status PENDING."""
+        try:
+            with self._connect() as conn:
+                with conn.cursor(row_factory=dict_row) as cur:
+                    cur.execute(
+                        """
+                        SELECT id, order_no, stock_code, quantity, price, is_buy, status, created_at, updated_at
+                        FROM orders
+                        WHERE status = 'PENDING'
+                        ORDER BY created_at ASC
+                        """
+                    )
+                    rows = cur.fetchall()
+        except Exception as exc:
+            if _is_database_error(exc):
+                raise StorageError("Failed to get pending orders") from exc
+            raise
+            
+        return [
+            OrderRecord(
+                id=row["id"],
+                order_no=row["order_no"],
+                stock_code=row["stock_code"],
+                quantity=row["quantity"],
+                price=row["price"],
+                is_buy=row["is_buy"],
+                status=row["status"],
+                created_at=_ensure_aware_utc(row["created_at"]),
+                updated_at=_ensure_aware_utc(row["updated_at"]),
+            ) for row in rows
+        ]
+
+    def update_order_status(self, order_no: str, status: str) -> None:
+        """Update the status of an existing order."""
+        try:
+            with self._connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE orders
+                        SET status = %s, updated_at = NOW()
+                        WHERE order_no = %s
+                        """,
+                        (status, order_no)
+                    )
+        except Exception as exc:
+            if _is_database_error(exc):
+                raise StorageError("Failed to update order status") from exc
+            raise
 
     def save_ohlcv_bars(self, bars: Sequence[OhlcvBar]) -> list[int]:
         """Persist OHLCV bars and return their row ids."""

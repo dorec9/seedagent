@@ -11,10 +11,10 @@ from pathlib import Path
 from typing import Any, Sequence
 
 try:
-    from .config import KiwoomConfig
+    from common.config import KiwoomConfig
     from .market_data import KiwoomAPIError, _RequestsAdapter, _first_present, _parse_int, _parse_return_code, requests
 except ImportError:  # pragma: no cover
-    from config import KiwoomConfig
+    from common.config import KiwoomConfig
     from market_data import KiwoomAPIError, _RequestsAdapter, _first_present, _parse_int, _parse_return_code, requests
 
 SUPPORTED_OHLCV_INTERVALS = {"1d", "1m", "3m", "5m", "10m"}
@@ -85,8 +85,14 @@ class KiwoomHistoricalMarketData:
             "api-id": self.DAILY_CHART_API_ID,
         }
         body = {"stk_cd": stock_code, "base_dt": (end_date or date.today()).strftime("%Y%m%d"), "upd_stkpc_tp": "1"}
+        
+        from .utils import kiwoom_rate_limiter, retry_api_call
+        def _make_request():
+            kiwoom_rate_limiter.wait()
+            return requests.post(url, json=body, headers=headers, timeout=self.timeout)
+            
         try:
-            response = requests.post(url, json=body, headers=headers, timeout=self.timeout)
+            response = retry_api_call(_make_request)
         except TimeoutError as exc:
             raise KiwoomAPIError(f"Daily OHLCV request failed for stock_code={stock_code}: timed out") from exc
         except _RequestsAdapter.RequestException as exc:

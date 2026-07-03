@@ -1,8 +1,11 @@
 python-dotenv
 pytest
-
 psycopg[binary]
-
 scikit-learn
-
 joblib
+PyQt5
+aiohttp
+fastapi
+uvicorn
+pandas
+yfinance

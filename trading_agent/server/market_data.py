@@ -9,9 +9,9 @@ from typing import Any
 from urllib import error, request
 
 try:
-    from .config import KiwoomConfig
-except ImportError:  # pragma: no cover - supports direct script-style imports
-    from config import KiwoomConfig
+    from common.config import KiwoomConfig
+except ImportError:
+    from common.config import KiwoomConfig
 
 
 @dataclass(frozen=True)
@@ -92,13 +92,19 @@ class KiwoomMarketData:
             "api-id": "ka10001",
         }
 
-        try:
-            response = requests.post(
+        from .utils import kiwoom_rate_limiter, retry_api_call
+        
+        def _make_request():
+            kiwoom_rate_limiter.wait()
+            return requests.post(
                 url,
                 json={"stk_cd": stk_cd},
                 headers=headers,
                 timeout=self.timeout,
             )
+            
+        try:
+            response = retry_api_call(_make_request)
         except TimeoutError as exc:
             raise KiwoomAPIError(f"Stock quote request failed for stock_code={stk_cd}: timed out") from exc
         except _RequestsAdapter.RequestException as exc:
